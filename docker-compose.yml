@@ -1,0 +1,15 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: urbanqueen_access
+      POSTGRES_USER: urbanqueen
+      POSTGRES_PASSWORD: urbanqueen
+    ports:
+      - "5432:5432"
+    volumes:
+      - urbanqueen_pg:/var/lib/postgresql/data
+
+volumes:
+  urbanqueen_pg:
