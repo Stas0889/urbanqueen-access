@@ -1,0 +1,16 @@
+{
+  "name": "urbanqueen-access-app",
+  "private": true,
+  "version": "0.2.0",
+  "workspaces": [
+    "apps/*"
+  ],
+  "scripts": {
+    "dev": "concurrently -n api,web -c auto \"npm run dev -w @urbanqueen/api\" \"npm run dev -w @urbanqueen/web\"",
+    "build": "npm run build -w @urbanqueen/api && npm run build -w @urbanqueen/web",
+    "start": "npm run start -w @urbanqueen/api"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}
