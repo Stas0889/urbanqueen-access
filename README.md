@@ -1,61 +1,32 @@
 # UrbanQueen Access
 
-Сервис управления доступом из GetCourse в закрытые Telegram-чаты UrbanQueen.
+Сервис управления доступом GetCourse → Telegram для двух действующих чатов UrbanQueen / ВЕДАНИЕ.
 
-## Что уже есть в v0.2
+## Что уже заложено в v0.2
 
-- React + TypeScript админка.
-- Dashboard по двум действующим чатам.
-- Пользователи и карточка пользователя.
-- Состояния GetCourse / Telegram для каждого чата отдельно.
-- Ручная блокировка администратора.
-- Сброс Telegram-привязки.
-- Журнал событий и экран ошибок.
-- Раздел интеграций.
-- PostgreSQL schema.
-- Заготовки GetCourse и Telegram webhook.
-- Очередь задач для будущей фоновой сверки.
-
-## Главные правила доступа
-
-1. Пользователь находится в группе GetCourse → `access_status=active`.
-2. Пользователя нет в группе GetCourse → `access_status=inactive`.
-3. `ACTIVE + Telegram BANNED` → автоматически выполнить `unbanChatMember`.
-4. `INACTIVE + Telegram MEMBER` → автоматически выполнить `banChatMember`.
-5. `manual_block=true` имеет приоритет над оплатой и снимается только администратором.
-
-## GetCourse группы
-
-- `4825549` — Пространство «ВЕДАНИЕ. Система восстановления человека».
-- `4900239` — Пространство «ВЕДАНИЕ: гормональный возраст 35+, 45+, 55+».
+- React + TypeScript админка
+- Node.js + Fastify API
+- PostgreSQL schema
+- две группы GetCourse: 4825549 и 4900239
+- отдельное состояние доступа для каждого чата
+- связь GetCourse user ID ↔ Telegram user ID
+- технический Telegram ban и отдельный ручной stop-list
+- временные invite links
+- журнал событий и очередь синхронизации
+- webhook endpoints для GetCourse и Telegram
+- логика будущей reconciliation: ACTIVE + BANNED → UNBAN, INACTIVE + MEMBER → BAN
 
 ## Локальный запуск
 
-Требования: Node.js 20+, npm, Docker.
+1. Скопировать `.env.example` в `.env`
+2. Запустить PostgreSQL: `docker compose up -d`
+3. Применить `db/migrations/001_init.sql`
+4. Установить зависимости: `npm install`
+5. Запустить: `npm run dev`
 
-```bash
-cp .env.example .env
-docker compose up -d
-npm install
-npm run dev
-```
+Web: http://localhost:5173
+API: http://localhost:4100
 
-Web: `http://localhost:5173`
+## Следующий этап
 
-API: `http://localhost:4100`
-
-Health: `http://localhost:4100/health`
-
-## Следующий этап v0.3
-
-- Получение активных пользователей из GetCourse.
-- Callback изменения доступа.
-- Telegram Bot API.
-- Временные invite links с Join Request.
-- Сопоставление GetCourse user ↔ Telegram user ID.
-- BAN / UNBAN и reconciliation.
-- Миграция со старого GetCourse-контроллера.
-
-## Безопасность
-
-`.env` не коммитится. Telegram Bot Token, GetCourse API key и webhook secrets должны храниться только на сервере.
+Подключение реального GetCourse, Telegram Bot API, обработка join requests, ban/unban и миграция со встроенного контроллера GetCourse.
