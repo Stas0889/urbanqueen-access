@@ -2,7 +2,7 @@ import 'dotenv/config';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import { z } from 'zod';
-import { pool } from './db.js';
+import { db, nowIso, sqliteInfo } from './db.js';
 
 const app = Fastify({ logger: true });
 
@@ -38,51 +38,60 @@ const fallbackChats = [
 app.get('/health', async () => ({
   ok: true,
   service: 'urbanqueen-access-api',
+  database: 'sqlite',
+  database_path: sqliteInfo.path,
   time: new Date().toISOString(),
 }));
 
 app.get('/api/dashboard', async () => {
   try {
-    const chats = await pool.query(`
+    const chats = db.prepare(`
       SELECT
         c.id,
         c.name,
         c.slug,
         c.getcourse_group_id,
         c.telegram_chat_id,
-        COUNT(uca.id) FILTER (WHERE uca.access_status = 'active')::int AS active_access,
-        COUNT(uca.id) FILTER (WHERE uca.telegram_status = 'member')::int AS telegram_members,
-        COUNT(uca.id) FILTER (WHERE uca.access_status = 'active' AND uca.telegram_status IN ('not_connected','unknown'))::int AS not_connected,
-        COUNT(uca.id) FILTER (WHERE uca.telegram_status = 'banned')::int AS banned
+        CAST(SUM(CASE WHEN uca.access_status = 'active' THEN 1 ELSE 0 END) AS INTEGER) AS active_access,
+        CAST(SUM(CASE WHEN uca.telegram_status = 'member' THEN 1 ELSE 0 END) AS INTEGER) AS telegram_members,
+        CAST(SUM(CASE WHEN uca.access_status = 'active' AND uca.telegram_status IN ('not_connected','unknown') THEN 1 ELSE 0 END) AS INTEGER) AS not_connected,
+        CAST(SUM(CASE WHEN uca.telegram_status = 'banned' THEN 1 ELSE 0 END) AS INTEGER) AS banned
       FROM chats c
       LEFT JOIN user_chat_access uca ON uca.chat_id = c.id
       GROUP BY c.id
       ORDER BY c.created_at
-    `);
+    `).all();
 
-    const stats = await pool.query(`
+    const stats = db.prepare(`
       SELECT
-        COUNT(*)::int AS total_users,
-        COUNT(*) FILTER (WHERE telegram_user_id IS NOT NULL)::int AS telegram_connected,
-        COUNT(*) FILTER (WHERE manual_block = true)::int AS manual_blocked
+        COUNT(*) AS total_users,
+        SUM(CASE WHEN telegram_user_id IS NOT NULL THEN 1 ELSE 0 END) AS telegram_connected,
+        SUM(CASE WHEN manual_block = 1 THEN 1 ELSE 0 END) AS manual_blocked
       FROM users
-    `);
+    `).get() as Record<string, number | null>;
 
-    const errors = await pool.query(`
-      SELECT COUNT(*)::int AS count
+    const errors = db.prepare(`
+      SELECT COUNT(*) AS count
       FROM events
-      WHERE level = 'error' AND created_at > now() - interval '7 days'
-    `);
+      WHERE level = 'error' AND datetime(created_at) > datetime('now', '-7 days')
+    `).get() as { count?: number } | undefined;
 
     return {
       mode: 'database',
-      stats: { ...stats.rows[0], errors: errors.rows[0]?.count ?? 0 },
-      chats: chats.rows,
+      database: 'sqlite',
+      stats: {
+        total_users: Number(stats?.total_users ?? 0),
+        telegram_connected: Number(stats?.telegram_connected ?? 0),
+        manual_blocked: Number(stats?.manual_blocked ?? 0),
+        errors: Number(errors?.count ?? 0),
+      },
+      chats,
     };
   } catch (error) {
     app.log.warn({ error }, 'Dashboard switched to demo mode');
     return {
       mode: 'demo',
+      database: 'sqlite',
       stats: { total_users: 0, telegram_connected: 0, manual_blocked: 0, errors: 0 },
       chats: fallbackChats,
     };
@@ -91,8 +100,7 @@ app.get('/api/dashboard', async () => {
 
 app.get('/api/chats', async () => {
   try {
-    const result = await pool.query('SELECT * FROM chats ORDER BY created_at');
-    return result.rows;
+    return db.prepare('SELECT * FROM chats ORDER BY created_at').all();
   } catch {
     return fallbackChats;
   }
@@ -100,7 +108,7 @@ app.get('/api/chats', async () => {
 
 app.get('/api/users', async () => {
   try {
-    const result = await pool.query(`
+    return db.prepare(`
       SELECT
         u.id,
         u.getcourse_user_id,
@@ -117,8 +125,7 @@ app.get('/api/users', async () => {
       FROM users u
       ORDER BY u.created_at DESC
       LIMIT 500
-    `);
-    return result.rows;
+    `).all();
   } catch {
     return [];
   }
@@ -128,19 +135,19 @@ app.get('/api/users/:id', async (request, reply) => {
   const params = z.object({ id: z.string().uuid() }).safeParse(request.params);
   if (!params.success) return reply.code(400).send({ error: 'invalid_user_id' });
 
-  const userResult = await pool.query(`
+  const user = db.prepare(`
     SELECT
       id, getcourse_user_id, email, name, phone,
       telegram_user_id, telegram_username, telegram_first_name,
       personal_access_token, manual_block, manual_block_reason,
       last_getcourse_sync_at, last_telegram_sync_at
     FROM users
-    WHERE id = $1
-  `, [params.data.id]);
+    WHERE id = ?
+  `).get(params.data.id) as Record<string, unknown> | undefined;
 
-  if (!userResult.rowCount) return reply.code(404).send({ error: 'user_not_found' });
+  if (!user) return reply.code(404).send({ error: 'user_not_found' });
 
-  const accessResult = await pool.query(`
+  const access = db.prepare(`
     SELECT
       c.id AS chat_id,
       c.name AS chat_name,
@@ -151,15 +158,18 @@ app.get('/api/users/:id', async (request, reply) => {
       uca.last_access_change_at
     FROM chats c
     LEFT JOIN user_chat_access uca
-      ON uca.chat_id = c.id AND uca.user_id = $1
+      ON uca.chat_id = c.id AND uca.user_id = ?
     ORDER BY c.created_at
-  `, [params.data.id]);
+  `).all(params.data.id) as Record<string, unknown>[];
 
-  return { ...userResult.rows[0], chats: accessResult.rows.map((row) => ({
-    ...row,
-    access_status: row.access_status ?? 'unknown',
-    telegram_status: row.telegram_status ?? 'not_connected',
-  })) };
+  return {
+    ...user,
+    chats: access.map((row) => ({
+      ...row,
+      access_status: row.access_status ?? 'unknown',
+      telegram_status: row.telegram_status ?? 'not_connected',
+    })),
+  };
 });
 
 app.post('/api/users/:id/manual-block', async (request, reply) => {
@@ -167,60 +177,75 @@ app.post('/api/users/:id/manual-block', async (request, reply) => {
   const body = z.object({ blocked: z.boolean(), reason: z.string().nullable().optional() }).safeParse(request.body);
   if (!params.success || !body.success) return reply.code(400).send({ error: 'invalid_request' });
 
-  const result = await pool.query(`
-    UPDATE users
-    SET manual_block = $2,
-        manual_block_reason = CASE WHEN $2 THEN COALESCE($3, 'Ручная блокировка администратора') ELSE NULL END,
-        updated_at = now()
-    WHERE id = $1
-    RETURNING *
-  `, [params.data.id, body.data.blocked, body.data.reason ?? null]);
+  const exists = db.prepare('SELECT id FROM users WHERE id = ?').get(params.data.id);
+  if (!exists) return reply.code(404).send({ error: 'user_not_found' });
 
-  if (!result.rowCount) return reply.code(404).send({ error: 'user_not_found' });
+  const blocked = body.data.blocked ? 1 : 0;
+  const reason = body.data.blocked ? (body.data.reason ?? 'Ручная блокировка администратора') : null;
+  const timestamp = nowIso();
 
-  await pool.query(`
-    INSERT INTO events (user_id, source, level, event_type, message, payload)
-    VALUES ($1, 'admin', 'info', $2, $3, $4::jsonb)
-  `, [params.data.id, body.data.blocked ? 'MANUAL_BLOCK_ENABLED' : 'MANUAL_BLOCK_DISABLED', body.data.blocked ? 'Пользователь заблокирован вручную' : 'Ручная блокировка снята', JSON.stringify(body.data)]);
+  const transaction = db.transaction(() => {
+    db.prepare(`
+      UPDATE users
+      SET manual_block = ?, manual_block_reason = ?, updated_at = ?
+      WHERE id = ?
+    `).run(blocked, reason, timestamp, params.data.id);
 
-  return result.rows[0];
+    db.prepare(`
+      INSERT INTO events (user_id, source, level, event_type, message, payload, created_at)
+      VALUES (?, 'admin', 'info', ?, ?, ?, ?)
+    `).run(
+      params.data.id,
+      body.data.blocked ? 'MANUAL_BLOCK_ENABLED' : 'MANUAL_BLOCK_DISABLED',
+      body.data.blocked ? 'Пользователь заблокирован вручную' : 'Ручная блокировка снята',
+      JSON.stringify(body.data),
+      timestamp,
+    );
+  });
+  transaction();
+
+  return db.prepare('SELECT * FROM users WHERE id = ?').get(params.data.id);
 });
 
 app.post('/api/users/:id/reset-telegram', async (request, reply) => {
   const params = z.object({ id: z.string().uuid() }).safeParse(request.params);
   if (!params.success) return reply.code(400).send({ error: 'invalid_user_id' });
 
-  const result = await pool.query(`
-    UPDATE users
-    SET telegram_user_id = NULL,
-        telegram_username = NULL,
-        telegram_first_name = NULL,
-        telegram_binding_locked = false,
-        last_telegram_sync_at = NULL,
-        updated_at = now()
-    WHERE id = $1
-    RETURNING *
-  `, [params.data.id]);
+  const exists = db.prepare('SELECT id FROM users WHERE id = ?').get(params.data.id);
+  if (!exists) return reply.code(404).send({ error: 'user_not_found' });
 
-  if (!result.rowCount) return reply.code(404).send({ error: 'user_not_found' });
+  const timestamp = nowIso();
+  const transaction = db.transaction(() => {
+    db.prepare(`
+      UPDATE users
+      SET telegram_user_id = NULL,
+          telegram_username = NULL,
+          telegram_first_name = NULL,
+          telegram_binding_locked = 0,
+          last_telegram_sync_at = NULL,
+          updated_at = ?
+      WHERE id = ?
+    `).run(timestamp, params.data.id);
 
-  await pool.query(`
-    UPDATE user_chat_access
-    SET telegram_status = 'not_connected', updated_at = now()
-    WHERE user_id = $1
-  `, [params.data.id]);
+    db.prepare(`
+      UPDATE user_chat_access
+      SET telegram_status = 'not_connected', updated_at = ?
+      WHERE user_id = ?
+    `).run(timestamp, params.data.id);
 
-  await pool.query(`
-    INSERT INTO events (user_id, source, level, event_type, message)
-    VALUES ($1, 'admin', 'warning', 'TELEGRAM_BINDING_RESET', 'Telegram-привязка пользователя сброшена')
-  `, [params.data.id]);
+    db.prepare(`
+      INSERT INTO events (user_id, source, level, event_type, message, created_at)
+      VALUES (?, 'admin', 'warning', 'TELEGRAM_BINDING_RESET', 'Telegram-привязка пользователя сброшена', ?)
+    `).run(params.data.id, timestamp);
+  });
+  transaction();
 
-  return result.rows[0];
+  return db.prepare('SELECT * FROM users WHERE id = ?').get(params.data.id);
 });
 
 app.get('/api/events', async () => {
   try {
-    const result = await pool.query(`
+    return db.prepare(`
       SELECT
         e.id,
         e.created_at,
@@ -236,8 +261,7 @@ app.get('/api/events', async () => {
       LEFT JOIN chats c ON c.id = e.chat_id
       ORDER BY e.created_at DESC
       LIMIT 250
-    `);
-    return result.rows;
+    `).all();
   } catch {
     return [];
   }
@@ -245,10 +269,10 @@ app.get('/api/events', async () => {
 
 app.post('/api/sync', async (_request, reply) => {
   try {
-    await pool.query(`
-      INSERT INTO sync_jobs (job_type, payload)
-      VALUES ('FULL_RECONCILIATION', '{}'::jsonb)
-    `);
+    db.prepare(`
+      INSERT INTO sync_jobs (job_type, payload, created_at, updated_at)
+      VALUES ('FULL_RECONCILIATION', '{}', ?, ?)
+    `).run(nowIso(), nowIso());
     return { ok: true, queued: true };
   } catch {
     return reply.code(503).send({ ok: false, error: 'database_unavailable' });
