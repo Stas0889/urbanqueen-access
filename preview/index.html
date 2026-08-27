@@ -20,7 +20,7 @@
     <button data-page="errors">! <span>Ошибки</span></button>
     <button data-page="integrations">⚙ <span>Интеграции</span></button>
   </div>
-  <div class="side-bottom">PREVIEW v0.2<br>Тестовые данные</div>
+  <div class="side-bottom">PREVIEW v0.3<br>Тестовые данные</div>
 </aside>
 <main class="main">
   <div class="topbar"><div><h2 id="pageTitle">Обзор доступа</h2><p id="pageSub">Состояние GetCourse и двух Telegram-чатов</p></div><div class="top-actions"><div class="pill">● Система работает</div><div class="avatar">S</div></div></div>
@@ -55,10 +55,10 @@
 
 <section id="errors" class="page hidden"><div class="panel"><h3>Требуют внимания</h3><div class="event"><i class="dot danger"></i><div><strong>Telegram sync retry</strong><div>Один запрос ожидает повторной попытки. Ничего критичного.</div></div></div><div class="event"><i class="dot warn"></i><div><strong>41 пользователь без Telegram ID</strong><div>Legacy-пользователи будут связаны во время миграции.</div></div></div></div></section>
 
-<section id="integrations" class="page hidden"><div class="panel"><h3>Интеграции</h3><div class="integration"><div><b>GetCourse</b><small>urban-queen.getcourse.ru · группы 4825549 / 4900239</small></div><span class="status warnbg">Ожидает ключи</span></div><div class="integration"><div><b>Telegram Bot API</b><small>Два чата · автоматический ban/unban · join requests</small></div><span class="status warnbg">Ожидает токен</span></div><div class="integration"><div><b>PostgreSQL</b><small>Будет размещена на сервере в России</small></div><span class="status warnbg">Не развёрнута</span></div><p class="footnote">В preview реальные ключи, персональные данные и Telegram ID не используются.</p></div></section>
+<section id="integrations" class="page hidden"><div class="panel"><h3>Интеграции</h3><div class="integration"><div><b>GetCourse</b><small>urban-queen.getcourse.ru · группы 4825549 / 4900239</small></div><span class="status warnbg">Ожидает ключи</span></div><div class="integration"><div><b>Telegram Bot API</b><small>Два чата · автоматический ban/unban · join requests</small></div><span class="status warnbg">Ожидает токен</span></div><div class="integration"><div><b>SQLite</b><small>Локальная база access.db на российском сервере</small></div><span class="status ok">Без отдельной оплаты</span></div><p class="footnote">В preview реальные ключи, персональные данные и Telegram ID не используются.</p></div></section>
 </main></div>
 <script>
-const titles={dashboard:['Обзор доступа','Состояние GetCourse и двух Telegram-чатов'],users:['Пользователи','Доступ, Telegram-привязка и блокировки'],chats:['Чаты','Правила доступа для каждого Telegram-чата'],events:['События','Полный журнал автоматических операций'],errors:['Ошибки','События, требующие внимания администратора'],integrations:['Интеграции','GetCourse, Telegram и база данных']};
+const titles={dashboard:['Обзор доступа','Состояние GetCourse и двух Telegram-чатов'],users:['Пользователи','Доступ, Telegram-привязка и блокировки'],chats:['Чаты','Правила доступа для каждого Telegram-чата'],events:['События','Полный журнал автоматических операций'],errors:['Ошибки','События, требующие внимания администратора'],integrations:['Интеграции','GetCourse, Telegram и локальная SQLite-база']};
 document.querySelectorAll('.nav button').forEach(b=>b.onclick=()=>{document.querySelectorAll('.nav button').forEach(x=>x.classList.remove('active'));b.classList.add('active');document.querySelectorAll('.page').forEach(x=>x.classList.add('hidden'));const p=b.dataset.page;document.getElementById(p).classList.remove('hidden');document.getElementById('pageTitle').textContent=titles[p][0];document.getElementById('pageSub').textContent=titles[p][1]});
 </script>
 </body></html>
