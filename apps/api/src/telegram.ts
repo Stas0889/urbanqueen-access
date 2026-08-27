@@ -14,7 +14,7 @@ async function callTelegram<T>(method: string, body: Record<string, unknown>, mu
     throw new Error(`telegram_mutation_not_allowed_for_chat:${mutationChatId}`);
   }
   if (!config.telegramBotToken) throw new Error('telegram_not_configured');
-  const response = await fetch(`https://api.telegram.org/bot${config.telegramBotToken}/${method}`, {
+  const response = await fetch(`${config.telegramApiBaseUrl}/bot${config.telegramBotToken}/${method}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),

@@ -11,6 +11,7 @@ const env = Object.fromEntries(
 
 const token = env.TELEGRAM_BOT_TOKEN;
 const secret = env.TELEGRAM_WEBHOOK_SECRET;
+const apiBaseUrl = (env.TELEGRAM_API_BASE_URL || 'https://api.telegram.org').replace(/\/$/, '');
 const testChatIds = (env.TELEGRAM_TEST_CHAT_IDS || '').split(',').map((value) => Number(value.trim())).filter(Number.isSafeInteger);
 const webhookUrl = `${env.APP_BASE_URL || 'https://access.urban-queen.com'}/api/webhooks/telegram`;
 
@@ -20,7 +21,7 @@ if (!token || !secret || !testChatIds.length) {
 }
 
 async function telegram(method, body = {}) {
-  const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
+  const response = await fetch(`${apiBaseUrl}/bot${token}/${method}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
