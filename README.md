@@ -66,6 +66,19 @@ SQLite работает в режиме WAL, включены foreign keys и `b
 - Telegram worker стартует только когда заданы bot token и webhook secret.
 - В production любые ban/unban/invite/approve/decline заблокированы, пока
   `ALLOW_PRODUCTION_TELEGRAM_MUTATIONS=true` не включён явно.
+- Исключение для изолированной проверки задаётся allowlist-переменной
+  `TELEGRAM_TEST_CHAT_IDS`. Каждый Telegram mutation повторно проверяет `chat_id`;
+  текущий test chat: `-1003872347411`.
+- `ALLOW_PRODUCTION_TELEGRAM_MUTATIONS` остаётся `false` на всём тестовом этапе.
+
+## Test integration
+
+- GetCourse rule: group `4938193`, environment `test`.
+- Telegram test chat: `-1003872347411`.
+- В разделе «Интеграции» можно вручную сверить одного пользователя по email.
+- После безопасной записи bot token и webhook secret в production env команда
+  `npm run telegram:configure` проверяет права бота до изменения webhook и выводит
+  только несекретную диагностику.
 - Во время разработки реальные Telegram chat ID не задаются.
 - GetCourse webhook принимает запросы только с правильным `X-Access-Secret`.
 - Telegram webhook проверяет `X-Telegram-Bot-Api-Secret-Token`.

@@ -8,6 +8,7 @@
   "scripts": {
     "dev": "concurrently -n api,web -c auto \"npm run dev -w @urbanqueen/api\" \"npm run dev -w @urbanqueen/web\"",
     "build": "npm run build -w @urbanqueen/api && npm run build -w @urbanqueen/web",
+    "telegram:configure": "node scripts/configure-telegram-webhook.mjs",
     "start": "npm run start -w @urbanqueen/api"
   },
   "devDependencies": {

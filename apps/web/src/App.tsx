@@ -11,6 +11,7 @@ type TelegramStatus = 'unknown' | 'not_connected' | 'member' | 'left' | 'banned'
 
 type ChatStats = {
   id: string; name: string; slug: string; getcourse_group_id: number; telegram_chat_id: number | null;
+  telegram_chat_title?: string | null; environment: 'production' | 'test'; last_sync_at?: string | null;
   active_access: number; telegram_members: number; not_connected: number; banned: number;
 };
 type DashboardData = {
@@ -22,11 +23,16 @@ type Session = { admin: { id: string; email: string }; csrf: string };
 type IntegrationsData = {
   appEnv: 'test' | 'production';
   sqlite: { connected: boolean; wal: boolean; foreignKeys: boolean };
-  getcourse: { configured: boolean; account: string; groups: number[] };
-  telegram: { configured: boolean; mutationsAllowed: boolean };
+  getcourse: { configured: boolean; webhookConfigured: boolean; account: string; groups: number[]; lastSync: string | null };
+  telegram: {
+    configured: boolean; productionMutationsAllowed: boolean; testMutationsAllowed: boolean;
+    testChatIds: number[]; testChatId: number | null; lastWebhook: string | null;
+    bot: { connected: boolean; status: string; username?: string | null; canInviteUsers?: boolean; canRestrictMembers?: boolean };
+  };
 };
 type UserChatAccess = {
   chat_id: string; chat_name: string; chat_slug: string;
+  environment?: 'production' | 'test';
   access_status: 'active' | 'inactive' | 'unknown'; telegram_status: TelegramStatus;
   technical_ban_reason?: string | null; last_access_change_at?: string | null;
 };
@@ -43,8 +49,8 @@ type EventItem = {
 };
 
 const demoChats: ChatStats[] = [
-  { id: 'demo-1', name: 'Пространство «ВЕДАНИЕ. Система восстановления человека»', slug: 'vedanie', getcourse_group_id: 4825549, telegram_chat_id: null, active_access: 0, telegram_members: 0, not_connected: 0, banned: 0 },
-  { id: 'demo-2', name: 'Пространство «ВЕДАНИЕ: гормональный возраст 35+, 45+, 55+»', slug: 'hormonal-age', getcourse_group_id: 4900239, telegram_chat_id: null, active_access: 0, telegram_members: 0, not_connected: 0, banned: 0 },
+  { id: 'demo-1', name: 'Пространство «ВЕДАНИЕ. Система восстановления человека»', slug: 'vedanie', getcourse_group_id: 4825549, telegram_chat_id: null, environment: 'production', active_access: 0, telegram_members: 0, not_connected: 0, banned: 0 },
+  { id: 'demo-2', name: 'Пространство «ВЕДАНИЕ: гормональный возраст 35+, 45+, 55+»', slug: 'hormonal-age', getcourse_group_id: 4900239, telegram_chat_id: null, environment: 'production', active_access: 0, telegram_members: 0, not_connected: 0, banned: 0 },
 ];
 const fallback: DashboardData = { mode: 'demo', stats: { total_users: 0, telegram_connected: 0, manual_blocked: 0, errors: 0 }, chats: demoChats };
 
@@ -115,6 +121,19 @@ export default function App() {
     if (!user.personal_access_token) return setToast('Ссылка появится после создания пользователя в базе');
     await navigator.clipboard.writeText(`${location.origin}/join/${user.personal_access_token}`); setToast('Персональная ссылка скопирована');
   };
+  const syncTestUser = async (identifier: string) => {
+    const value = identifier.trim();
+    const body = /^\d+$/.test(value) ? { getcourse_user_id: Number(value) } : { email: value };
+    try {
+      const result = await api<{ active: boolean }>('/api/test-sync/getcourse-user', { method: 'POST', body: JSON.stringify(body) });
+      setToast(result.active ? 'Тестовый доступ ACTIVE' : 'Тестовый доступ INACTIVE');
+      await load();
+      return true;
+    } catch {
+      setToast('Не удалось синхронизировать тестового пользователя');
+      return false;
+    }
+  };
   const logout = async () => {
     await api('/api/auth/logout', { method: 'POST' }).catch(() => undefined);
     setSession(null);
@@ -122,7 +141,7 @@ export default function App() {
 
   const title: Record<Section, [string, string]> = {
     dashboard: ['Обзор', 'Состояние доступа и Telegram-чатов'], users: ['Пользователи', 'GetCourse, Telegram и права доступа'],
-    chats: ['Чаты', 'Два пространства и независимые правила доступа'], events: ['События', 'История действий системы'],
+    chats: ['Чаты', 'Production-пространства и изолированное тестовое правило'], events: ['События', 'История действий системы'],
     errors: ['Ошибки', 'События, требующие внимания'], integrations: ['Интеграции', 'GetCourse, Telegram и SQLite'], settings: ['Настройки', 'Правила безопасности и синхронизации'],
   };
 
@@ -145,7 +164,7 @@ export default function App() {
       {section === 'chats' && <Chats chats={dashboard.chats}/>} 
       {section === 'events' && <Events events={events}/>} 
       {section === 'errors' && <Errors events={events.filter((e) => e.level === 'error')}/>} 
-      {section === 'integrations' && <Integrations data={integrations}/>}
+      {section === 'integrations' && <Integrations data={integrations} onSyncTestUser={syncTestUser}/>}
       {section === 'settings' && <SettingsPage/>}
     </main>
     {selected && <UserDrawer user={selected} onClose={() => setSelected(null)} onBlock={setManualBlock} onReset={resetTelegram} onCopy={copyLink}/>} 
@@ -196,11 +215,37 @@ function Chats({ chats }: { chats: ChatStats[] }) {
 function Events({ events }: { events: EventItem[] }) { return <section className="panel">{events.length ? <EventList events={events}/> : <Empty/>}</section>; }
 function Errors({ events }: { events: EventItem[] }) { return <section className="panel">{events.length ? <EventList events={events}/> : <div className="good-empty"><CheckCircle2 size={28}/><strong>Критических ошибок нет</strong><span>Здесь появятся ошибки API, прав бота и рассинхронизации.</span></div>}</section>; }
 
-function Integrations({ data }: { data: IntegrationsData | null }) {
+function Integrations({ data, onSyncTestUser }: { data: IntegrationsData | null; onSyncTestUser: (identifier: string) => Promise<boolean> }) {
+  const [identifier, setIdentifier] = useState('');
+  const [syncing, setSyncing] = useState(false);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!identifier.trim()) return;
+    setSyncing(true);
+    const ok = await onSyncTestUser(identifier);
+    if (ok) setIdentifier('');
+    setSyncing(false);
+  };
   return <div className="integration-grid">
     <Integration icon={<Database/>} title="SQLite" status={data?.sqlite.connected ? 'Подключена' : 'Недоступна'} ok={data?.sqlite.connected} rows={[['WAL',data?.sqlite.wal ? 'Включён' : 'Нет данных'],['Foreign keys',data?.sqlite.foreignKeys ? 'Включены' : 'Нет данных'],['Среда',data?.appEnv ?? '—']]}/>
-    <Integration icon={<Link2/>} title="GetCourse" status={data?.getcourse.configured ? 'Подключён' : 'Ожидает ключи'} ok={data?.getcourse.configured} rows={[['Аккаунт',data?.getcourse.account ?? '—'],['Группы',data?.getcourse.groups.join(' / ') ?? '—'],['Webhook','/api/webhooks/getcourse']]}/>
-    <Integration icon={<Bot/>} title="Telegram Bot API" status={data?.telegram.configured ? 'Подключён' : 'Ожидает токен'} ok={data?.telegram.configured} rows={[['Webhook','/api/webhooks/telegram'],['Mutations',data?.telegram.mutationsAllowed ? 'Разрешены для среды' : 'Заблокированы'],['Вход','Join Request']]}/>
+    <Integration icon={<Link2/>} title="GetCourse TEST" status={data?.getcourse.configured ? 'API подключён' : 'Ожидает API key'} ok={data?.getcourse.configured} rows={[['Аккаунт',data?.getcourse.account ?? '—'],['Test group',data?.getcourse.groups.join(' / ') ?? '—'],['Последняя сверка',date(data?.getcourse.lastSync,true)],['Webhook',data?.getcourse.webhookConfigured ? 'Настроен' : 'Не настроен']]}/>
+    <Integration icon={<Bot/>} title="Telegram TEST Bot" status={data?.telegram.bot.connected ? 'Бот подключён' : 'Ожидает токен/права'} ok={data?.telegram.bot.connected} rows={[
+      ['Test chat',data?.telegram.testChatId ? String(data.telegram.testChatId) : '—'],
+      ['Bot status',data?.telegram.bot.status ?? '—'],
+      ['Invite users',data?.telegram.bot.canInviteUsers ? 'Разрешено' : 'Нет'],
+      ['Restrict members',data?.telegram.bot.canRestrictMembers ? 'Разрешено' : 'Нет'],
+      ['Test mutations',data?.telegram.testMutationsAllowed ? `Только ${data.telegram.testChatIds.join(', ')}` : 'Заблокированы'],
+      ['Production mutations',data?.telegram.productionMutationsAllowed ? 'Включены' : 'Отключены'],
+      ['Последний webhook',date(data?.telegram.lastWebhook,true)],
+    ]}/>
+    <section className="panel integration test-sync-panel">
+      <div className="integration-head"><div className="integration-icon"><RefreshCw/></div><div><h3>Тестовый пользователь</h3><span className="pill muted">Один пользователь</span></div></div>
+      <p className="integration-copy">Введите email GetCourse. GC ID можно использовать после первой синхронизации, когда email уже сохранён в базе.</p>
+      <form className="test-sync-form" onSubmit={submit}>
+        <input value={identifier} onChange={(event) => setIdentifier(event.target.value)} placeholder="email или GetCourse ID" aria-label="Email или GetCourse ID"/>
+        <button className="btn primary" disabled={syncing || !identifier.trim()}>{syncing ? <Loader2 className="spin" size={17}/> : <RefreshCw size={17}/>}Сверить</button>
+      </form>
+    </section>
   </div>;
 }
 
@@ -231,7 +276,7 @@ function UserDrawer({ user, onClose, onBlock, onReset, onCopy }: { user: UserIte
 }
 
 function Stat({ title, value, detail, icon }: { title:string; value:number; detail:string; icon:ReactNode }) { return <div className="stat"><div className="stat-icon">{icon}</div><span>{title}</span><strong>{value}</strong><small>{detail}</small></div>; }
-function ChatCard({ chat, index }: { chat:ChatStats; index:number }) { return <article className="chat-card"><div className="chat-top"><div className="chat-number">0{index}</div><span className={`pill ${chat.telegram_chat_id ? 'success' : 'warning'}`}>{chat.telegram_chat_id ? 'Telegram подключён' : 'Нужно подключить'}</span></div><h3>{chat.name}</h3><div className="group-id"><span>GetCourse group</span><strong>#{chat.getcourse_group_id}</strong></div><div className="metrics"><Metric value={chat.active_access} label="Активный доступ"/><Metric value={chat.telegram_members} label="В Telegram"/><Metric value={chat.not_connected} label="Не связаны"/><Metric value={chat.banned} label="Blacklist"/></div></article>; }
+function ChatCard({ chat, index }: { chat:ChatStats; index:number }) { return <article className="chat-card"><div className="chat-top"><div className="chat-number">0{index}</div><div className="chat-badges">{chat.environment === 'test' && <span className="pill test">TEST</span>}<span className={`pill ${chat.telegram_chat_id ? 'success' : 'warning'}`}>{chat.telegram_chat_id ? 'Telegram подключён' : 'Нужно подключить'}</span></div></div><h3>{chat.name}</h3><div className="group-id"><span>GetCourse group</span><strong>#{chat.getcourse_group_id}</strong></div><div className="metrics"><Metric value={chat.active_access} label="Активный доступ"/><Metric value={chat.telegram_members} label="В Telegram"/><Metric value={chat.not_connected} label="Не связаны"/><Metric value={chat.banned} label="Blacklist"/></div></article>; }
 function Metric({ value,label }:{value:number;label:string}) { return <div><strong>{value}</strong><span>{label}</span></div>; }
 function EventList({ events }:{events:EventItem[]}) { return <div className="event-list">{events.map((e) => <div className="event-row" key={e.id}><div className={`event-dot ${e.level}`}>{e.level === 'error' ? <AlertTriangle size={15}/> : e.level === 'warning' ? <Clock3 size={15}/> : <CheckCircle2 size={15}/>}</div><div><strong>{e.message}</strong><span>{[e.user_email,e.chat_name].filter(Boolean).join(' · ') || e.event_type}</span></div><time>{date(e.created_at,true)}</time></div>)}</div>; }
 function Integration({ icon,title,status,ok=false,rows }:{icon:ReactNode;title:string;status:string;ok?:boolean;rows:[string,string][]}) { return <section className="panel integration"><div className="integration-head"><div className="integration-icon">{icon}</div><div><h3>{title}</h3><span className={`pill ${ok ? 'success' : 'warning'}`}>{status}</span></div></div>{rows.map(([k,v]) => <div className="config" key={k}><span>{k}</span><strong>{v}</strong></div>)}</section>; }

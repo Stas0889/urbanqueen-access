@@ -10,6 +10,7 @@ import { z } from 'zod';
 import { bootstrapAdmin, registerAuthRoutes, requireAdmin, requireAdminMutation } from './auth.js';
 import { config } from './config.js';
 import { db, nowIso, sqliteInfo } from './db.js';
+import { getCourseUserByEmail } from './getcourse-client.js';
 import { applyGetCourseAccessUpdate } from './getcourse.js';
 import { telegram } from './telegram.js';
 import { startWorker } from './worker.js';
@@ -46,7 +47,7 @@ function getUser(id: string) {
   const user = db.prepare(userSelect).get(id) as Record<string, unknown> | undefined;
   if (!user) return null;
   const chats = db.prepare(`
-    SELECT c.id AS chat_id, c.name AS chat_name, c.slug AS chat_slug,
+    SELECT c.id AS chat_id, c.name AS chat_name, c.slug AS chat_slug, c.environment,
       COALESCE(uca.access_status, 'unknown') AS access_status,
       COALESCE(uca.telegram_status, 'not_connected') AS telegram_status,
       uca.technical_ban_reason, uca.last_access_change_at, uca.last_telegram_change_at
@@ -67,6 +68,7 @@ app.get('/health', async () => ({
 app.get('/api/dashboard', { preHandler: requireAdmin }, async () => {
   const chats = db.prepare(`
     SELECT c.id, c.name, c.slug, c.getcourse_group_id, c.telegram_chat_id,
+      c.telegram_chat_title, c.environment, c.last_sync_at,
       COUNT(CASE WHEN uca.access_status = 'active' THEN 1 END) AS active_access,
       COUNT(CASE WHEN uca.telegram_status = 'member' THEN 1 END) AS telegram_members,
       COUNT(CASE WHEN uca.access_status = 'active' AND uca.telegram_status IN ('not_connected','unknown') THEN 1 END) AS not_connected,
@@ -187,17 +189,90 @@ app.get('/api/events', { preHandler: requireAdmin }, async () => db.prepare(`
   ORDER BY e.created_at DESC LIMIT 250
 `).all());
 
-app.get('/api/integrations', { preHandler: requireAdmin }, async () => ({
-  appEnv: config.appEnv,
-  sqlite: { connected: true, wal: sqliteInfo.journalMode.toLowerCase() === 'wal', foreignKeys: sqliteInfo.foreignKeys },
-  getcourse: { configured: config.getcourseConfigured, account: config.getcourseAccount, groups: [4825549, 4900239] },
-  telegram: { configured: config.telegramConfigured, mutationsAllowed: config.telegramMutationsAllowed },
-}));
+app.get('/api/integrations', { preHandler: requireAdmin }, async () => {
+  const testRule = db.prepare(`SELECT id, getcourse_group_id, telegram_chat_id, last_sync_at FROM chats WHERE environment = 'test' AND is_enabled = 1 ORDER BY created_at LIMIT 1`)
+    .get() as { id: string; getcourse_group_id: number; telegram_chat_id: number | null; last_sync_at: string | null } | undefined;
+  const lastWebhook = db.prepare(`SELECT MAX(created_at) AS value FROM events WHERE event_type = 'TELEGRAM_WEBHOOK_RECEIVED'`).get() as { value: string | null };
+  let bot: Record<string, unknown> = { connected: false, status: 'not_configured' };
+  if (config.telegramBotToken && testRule?.telegram_chat_id) {
+    try {
+      const identity = await telegram.getMe();
+      const membership = await telegram.getChatMember(testRule.telegram_chat_id, identity.id);
+      bot = {
+        connected: true,
+        status: membership.status,
+        username: identity.username ?? null,
+        canInviteUsers: membership.can_invite_users === true,
+        canRestrictMembers: membership.can_restrict_members === true,
+      };
+    } catch {
+      bot = { connected: false, status: 'check_failed' };
+    }
+  }
+  return {
+    appEnv: config.appEnv,
+    sqlite: { connected: true, wal: sqliteInfo.journalMode.toLowerCase() === 'wal', foreignKeys: sqliteInfo.foreignKeys },
+    getcourse: {
+      configured: config.getcourseApiConfigured,
+      webhookConfigured: Boolean(config.getcourseWebhookSecret),
+      account: config.getcourseAccount,
+      groups: testRule ? [testRule.getcourse_group_id] : [],
+      lastSync: testRule?.last_sync_at ?? null,
+    },
+    telegram: {
+      configured: config.telegramConfigured,
+      productionMutationsAllowed: config.allowProductionTelegramMutations,
+      testChatIds: config.telegramTestChatIds,
+      testMutationsAllowed: Boolean(testRule?.telegram_chat_id && config.isAllowedTelegramMutation(testRule.telegram_chat_id)),
+      lastWebhook: lastWebhook.value,
+      testChatId: testRule?.telegram_chat_id ?? null,
+      bot,
+    },
+  };
+});
 
 app.post('/api/sync', { preHandler: requireAdminMutation }, async () => {
   const timestamp = nowIso();
   db.prepare(`INSERT INTO sync_jobs (job_type, payload, run_after, created_at, updated_at) VALUES ('FULL_RECONCILIATION', '{}', ?, ?, ?)`).run(timestamp, timestamp, timestamp);
   return { ok: true, queued: true };
+});
+
+app.post('/api/test-sync/getcourse-user', { preHandler: requireAdminMutation }, async (request, reply) => {
+  const input = z.object({
+    email: z.string().email().optional(),
+    getcourse_user_id: z.coerce.number().int().positive().optional(),
+  }).refine((value) => value.email || value.getcourse_user_id, 'email_or_id_required').safeParse(request.body);
+  if (!input.success) return reply.code(400).send({ error: 'invalid_request' });
+  if (!config.getcourseApiKey) return reply.code(409).send({ error: 'getcourse_api_key_missing' });
+  const testRule = db.prepare(`SELECT id, getcourse_group_id FROM chats WHERE environment = 'test' AND is_enabled = 1 ORDER BY created_at LIMIT 1`)
+    .get() as { id: string; getcourse_group_id: number } | undefined;
+  if (!testRule) return reply.code(409).send({ error: 'test_access_rule_missing' });
+  let email = input.data.email?.trim().toLowerCase();
+  if (!email && input.data.getcourse_user_id) {
+    email = (db.prepare('SELECT email FROM users WHERE getcourse_user_id = ?').get(input.data.getcourse_user_id) as { email: string | null } | undefined)?.email ?? undefined;
+  }
+  if (!email) return reply.code(400).send({ error: 'email_required_for_getcourse_export' });
+
+  try {
+    const snapshot = await getCourseUserByEmail(email);
+    const existing = db.prepare('SELECT getcourse_user_id, name FROM users WHERE email = ? COLLATE NOCASE').get(email) as { getcourse_user_id: number; name: string | null } | undefined;
+    if (!snapshot && !existing) return reply.code(404).send({ error: 'getcourse_user_not_found' });
+    const active = snapshot?.groupIds.includes(testRule.getcourse_group_id) ?? false;
+    const result = applyGetCourseAccessUpdate({
+      user_id: snapshot?.userId ?? existing!.getcourse_user_id,
+      email: snapshot?.email ?? email,
+      name: snapshot?.name ?? existing!.name,
+      group_id: testRule.getcourse_group_id,
+      access_status: active ? 'active' : 'inactive',
+      event: 'manual_test_sync',
+    });
+    const timestamp = nowIso();
+    db.prepare('UPDATE chats SET last_sync_at = ?, updated_at = ? WHERE id = ?').run(timestamp, timestamp, testRule.id);
+    return { ok: true, active, groupId: testRule.getcourse_group_id, ...result };
+  } catch (error) {
+    request.log.error({ error: error instanceof Error ? error.message : 'unknown' }, 'GetCourse test user sync failed');
+    return reply.code(502).send({ error: error instanceof Error ? error.message : 'getcourse_sync_failed' });
+  }
 });
 
 const accessStatus = z.preprocess((value) => String(value).toLowerCase(), z.enum(['active', 'inactive']));
@@ -231,6 +306,11 @@ app.post('/api/webhooks/telegram', {
   const update = z.object({ update_id: z.number().int() }).passthrough().safeParse(request.body);
   if (!update.success) return reply.code(400).send({ ok: false, error: 'invalid_payload' });
   const timestamp = nowIso();
+  const accepted = db.prepare('INSERT OR IGNORE INTO telegram_updates (update_id, received_at) VALUES (?, ?)')
+    .run(update.data.update_id, timestamp);
+  if (accepted.changes === 0) return reply.code(200).send({ ok: true, duplicate: true });
+  db.prepare(`INSERT INTO events (source, level, event_type, message, created_at) VALUES ('telegram', 'info', 'TELEGRAM_WEBHOOK_RECEIVED', 'Получено обновление Telegram webhook', ?)`)
+    .run(timestamp);
   db.prepare(`INSERT INTO sync_jobs (job_type, payload, run_after, created_at, updated_at) VALUES ('TELEGRAM_UPDATE', ?, ?, ?, ?)`)
     .run(JSON.stringify(update.data), timestamp, timestamp, timestamp);
   return reply.code(202).send({ ok: true, queued: true });
@@ -247,13 +327,14 @@ async function joinHandler(request: FastifyRequest, reply: FastifyReply) {
   if (!user) return reply.code(404).type('text/plain').send('Ссылка недействительна.');
   if (user.manual_block) return reply.code(403).type('text/plain').send('Доступ временно ограничен администратором.');
 
-  const chats = db.prepare(`
+  const chats = (db.prepare(`
     SELECT c.id, c.name, c.slug, c.telegram_chat_id
     FROM user_chat_access uca JOIN chats c ON c.id = uca.chat_id
     WHERE uca.user_id = ? AND uca.access_status = 'active' AND c.is_enabled = 1
       AND c.telegram_chat_id IS NOT NULL AND (? IS NULL OR c.slug = ?)
     ORDER BY c.created_at
-  `).all(user.id, params.data.chatSlug ?? null, params.data.chatSlug ?? null) as Array<{ id: string; name: string; slug: string; telegram_chat_id: number }>;
+  `).all(user.id, params.data.chatSlug ?? null, params.data.chatSlug ?? null) as Array<{ id: string; name: string; slug: string; telegram_chat_id: number }>)
+    .filter((chat) => config.isAllowedTelegramMutation(chat.telegram_chat_id));
   if (!chats.length) return reply.code(403).type('text/plain').send('Активный доступ к Telegram-чату не найден.');
   if (chats.length > 1 && !params.data.chatSlug) {
     const links = chats.map((chat) => `<li><a href="/join/${encodeURIComponent(params.data.token)}/${encodeURIComponent(chat.slug)}">${escapeHtml(chat.name)}</a></li>`).join('');

@@ -5,6 +5,11 @@ const booleanValue = z.preprocess(
   z.boolean(),
 );
 
+function telegramChatIds(value: unknown) {
+  if (typeof value !== 'string' || !value.trim()) return [];
+  return value.split(',').map((item) => Number(item.trim())).filter(Number.isSafeInteger);
+}
+
 const envSchema = z.object({
   APP_ENV: z.enum(['test', 'production']).default('test'),
   HOST: z.string().min(1).default('127.0.0.1'),
@@ -19,6 +24,7 @@ const envSchema = z.object({
   GETCOURSE_WEBHOOK_SECRET: z.string().default(''),
   TELEGRAM_BOT_TOKEN: z.string().default(''),
   TELEGRAM_WEBHOOK_SECRET: z.string().default(''),
+  TELEGRAM_TEST_CHAT_IDS: z.preprocess(telegramChatIds, z.array(z.number().int().safe())).default([]),
   ALLOW_PRODUCTION_TELEGRAM_MUTATIONS: booleanValue.default(false),
 });
 
@@ -46,11 +52,15 @@ export const config = {
   getcourseWebhookSecret: parsed.GETCOURSE_WEBHOOK_SECRET,
   telegramBotToken: parsed.TELEGRAM_BOT_TOKEN,
   telegramWebhookSecret: parsed.TELEGRAM_WEBHOOK_SECRET,
+  telegramTestChatIds: parsed.TELEGRAM_TEST_CHAT_IDS,
   allowProductionTelegramMutations: parsed.ALLOW_PRODUCTION_TELEGRAM_MUTATIONS,
   get isProduction() { return this.appEnv === 'production'; },
   get telegramConfigured() { return Boolean(this.telegramBotToken && this.telegramWebhookSecret); },
+  get getcourseApiConfigured() { return Boolean(this.getcourseApiKey); },
   get getcourseConfigured() { return Boolean(this.getcourseApiKey && this.getcourseWebhookSecret); },
-  get telegramMutationsAllowed() {
-    return this.appEnv === 'test' || this.allowProductionTelegramMutations;
+  isAllowedTelegramMutation(chatId: number) {
+    return this.appEnv === 'test'
+      || this.allowProductionTelegramMutations
+      || this.telegramTestChatIds.includes(chatId);
   },
 };

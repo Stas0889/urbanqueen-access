@@ -1,4 +1,5 @@
 import type { FastifyBaseLogger } from 'fastify';
+import { config } from './config.js';
 import { db, nowIso } from './db.js';
 import { telegram, type TelegramMemberStatus } from './telegram.js';
 
@@ -43,7 +44,7 @@ async function reconcileRow(row: ReconcileRow) {
     event({ userId: row.user_id, chatId: row.chat_id, type: 'TELEGRAM_BAN_SUCCESS', message: 'Пользователь удалён из Telegram из-за ручной блокировки' });
   } else if (row.access_status === 'inactive' && status === 'member') {
     await telegram.ban(row.telegram_chat_id, row.telegram_user_id);
-    db.prepare(`UPDATE user_chat_access SET telegram_status = 'banned', technical_ban_reason = 'payment_expired', last_telegram_change_at = ?, updated_at = ? WHERE user_id = ? AND chat_id = ?`)
+    db.prepare(`UPDATE user_chat_access SET telegram_status = 'banned', technical_ban_reason = 'access_expired', last_telegram_change_at = ?, updated_at = ? WHERE user_id = ? AND chat_id = ?`)
       .run(timestamp, timestamp, row.user_id, row.chat_id);
     event({ userId: row.user_id, chatId: row.chat_id, type: 'TELEGRAM_BAN_SUCCESS', message: 'Доступ закончился: пользователь удалён из Telegram' });
   } else if (!row.manual_block && row.access_status === 'active' && status === 'banned') {
@@ -55,7 +56,7 @@ async function reconcileRow(row: ReconcileRow) {
 }
 
 function reconcileRows(userId?: string, chatId?: string) {
-  return db.prepare(`
+  const rows = db.prepare(`
     SELECT u.id AS user_id, c.id AS chat_id, u.telegram_user_id, c.telegram_chat_id,
       u.manual_block, uca.access_status, uca.telegram_status
     FROM user_chat_access uca
@@ -64,6 +65,7 @@ function reconcileRows(userId?: string, chatId?: string) {
     WHERE u.telegram_user_id IS NOT NULL AND c.telegram_chat_id IS NOT NULL AND c.is_enabled = 1
       AND (? IS NULL OR u.id = ?) AND (? IS NULL OR c.id = ?)
   `).all(userId ?? null, userId ?? null, chatId ?? null, chatId ?? null) as ReconcileRow[];
+  return rows.filter((row) => config.isAllowedTelegramMutation(row.telegram_chat_id));
 }
 
 async function handleJoinRequest(update: Record<string, unknown>) {
@@ -72,6 +74,10 @@ async function handleJoinRequest(update: Record<string, unknown>) {
     invite_link?: { invite_link?: string };
   } | undefined;
   if (!join?.chat?.id || !join.from?.id || !join.invite_link?.invite_link) return;
+  if (!config.isAllowedTelegramMutation(join.chat.id)) {
+    event({ level: 'warning', type: 'TELEGRAM_CHAT_NOT_ALLOWED', message: 'Telegram update для чата вне allowlist проигнорирован', payload: { chat_id: join.chat.id } });
+    return;
+  }
   const invite = db.prepare(`
     SELECT i.id, i.user_id, i.chat_id, i.expires_at, i.revoked_at,
       u.telegram_user_id, u.manual_block, uca.access_status
@@ -114,6 +120,7 @@ async function handleJoinRequest(update: Record<string, unknown>) {
   })();
   await telegram.revokeInvite(join.chat.id, join.invite_link.invite_link).catch(() => undefined);
   event({ userId: invite.user_id, chatId: invite.chat_id, type: 'JOIN_APPROVED', message: 'Заявка автоматически одобрена, Telegram ID сохранён' });
+  event({ userId: invite.user_id, chatId: invite.chat_id, type: 'TELEGRAM_BINDING_CREATED', message: 'GetCourse-пользователь связан с Telegram ID' });
 }
 
 async function execute(job: Job) {
