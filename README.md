@@ -15,6 +15,9 @@ npm run dev
 Frontend: `http://localhost:5173`
 API: `http://localhost:4100`
 
+Backend по умолчанию слушает только `127.0.0.1`; внешний доступ в production
+идёт исключительно через отдельный Nginx virtual host.
+
 Без `.env` приложение запускается только в безопасном режиме `APP_ENV=test`.
 Локальная учётная запись: `admin@local.test`; пароль:
 `local-development-only`. Перед любой общей или production-средой задайте

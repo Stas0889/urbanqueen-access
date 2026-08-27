@@ -7,6 +7,7 @@ const booleanValue = z.preprocess(
 
 const envSchema = z.object({
   APP_ENV: z.enum(['test', 'production']).default('test'),
+  HOST: z.string().min(1).default('127.0.0.1'),
   PORT: z.coerce.number().int().min(1).max(65535).default(4100),
   APP_BASE_URL: z.string().url().default('http://localhost:5173'),
   SQLITE_PATH: z.string().min(1).default('./data/access.db'),
@@ -33,6 +34,7 @@ if (parsed.APP_ENV === 'production') {
 
 export const config = {
   appEnv: parsed.APP_ENV,
+  host: parsed.HOST,
   port: parsed.PORT,
   appBaseUrl: parsed.APP_BASE_URL,
   sqlitePath: parsed.SQLITE_PATH,

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 DB_PATH="${SQLITE_PATH:-/var/lib/urbanqueen/access.db}"
-BACKUP_DIR="${BACKUP_DIR:-/var/backups/urbanqueen-access}"
+BACKUP_DIR="${BACKUP_DIR:-/var/backups/urbanqueen}"
 KEEP_DAYS="${BACKUP_KEEP_DAYS:-14}"
 
 if [[ ! -f "$DB_PATH" ]]; then
