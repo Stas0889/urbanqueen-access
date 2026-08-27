@@ -81,6 +81,10 @@ SQLite работает в режиме WAL, включены foreign keys и `b
   только несекретную диагностику.
 - Во время разработки реальные Telegram chat ID не задаются.
 - GetCourse webhook принимает запросы только с правильным `X-Access-Secret`.
+- Callback `/api/callbacks/getcourse/access-link` принимает активного пользователя,
+  обновляет доступ и возвращает постоянную персональную ссылку. GetCourse может
+  сохранить этот текстовый ответ в дополнительное поле пользователя. Callback
+  работает только для Telegram-чатов, разрешённых safety allowlist.
 - Telegram webhook проверяет `X-Telegram-Bot-Api-Secret-Token`.
 
 ## Production files

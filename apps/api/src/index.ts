@@ -285,16 +285,59 @@ const getCourseWebhook = z.object({
   event: z.string().min(1).max(100),
 });
 
+function hasValidGetCourseSecret(request: FastifyRequest) {
+  return Boolean(
+    config.getcourseWebhookSecret
+    && request.headers['x-access-secret'] === config.getcourseWebhookSecret,
+  );
+}
+
 app.post('/api/webhooks/getcourse', {
   config: { rateLimit: { max: 120, timeWindow: '1 minute' } },
 }, async (request, reply) => {
-  if (!config.getcourseWebhookSecret || request.headers['x-access-secret'] !== config.getcourseWebhookSecret) {
+  if (!hasValidGetCourseSecret(request)) {
     return reply.code(401).send({ ok: false, error: 'invalid_secret' });
   }
   const input = getCourseWebhook.safeParse(request.body);
   if (!input.success) return reply.code(400).send({ ok: false, error: 'invalid_payload' });
   const result = applyGetCourseAccessUpdate(input.data);
   return reply.code(202).send({ ok: true, ...result });
+});
+
+app.post('/api/callbacks/getcourse/access-link', {
+  config: { rateLimit: { max: 120, timeWindow: '1 minute' } },
+}, async (request, reply) => {
+  if (!hasValidGetCourseSecret(request)) {
+    return reply.code(401).type('text/plain').send('invalid_secret');
+  }
+
+  const input = getCourseWebhook.extend({
+    access_status: z.preprocess(
+      (value) => String(value ?? 'active').toLowerCase(),
+      z.literal('active'),
+    ),
+  }).safeParse(request.body);
+  if (!input.success) return reply.code(400).type('text/plain').send('invalid_payload');
+
+  const chat = db.prepare(`
+    SELECT id, slug, telegram_chat_id
+    FROM chats
+    WHERE getcourse_group_id = ? AND is_enabled = 1
+  `).get(input.data.group_id) as { id: string; slug: string; telegram_chat_id: number | null } | undefined;
+  if (!chat) return reply.code(404).type('text/plain').send('unknown_or_disabled_group');
+  if (chat.telegram_chat_id === null || !config.isAllowedTelegramMutation(chat.telegram_chat_id)) {
+    return reply.code(403).type('text/plain').send('group_not_enabled_for_callback');
+  }
+
+  const result = applyGetCourseAccessUpdate(input.data);
+  if (!result.accepted) return reply.code(409).type('text/plain').send(result.reason);
+
+  const user = db.prepare('SELECT personal_access_token FROM users WHERE id = ?')
+    .get(result.userId) as { personal_access_token: string } | undefined;
+  if (!user) return reply.code(500).type('text/plain').send('user_link_missing');
+
+  const link = new URL(`/join/${encodeURIComponent(user.personal_access_token)}/${encodeURIComponent(chat.slug)}`, config.appBaseUrl);
+  return reply.type('text/plain; charset=utf-8').send(link.toString());
 });
 
 app.post('/api/webhooks/telegram', {
