@@ -1,6 +1,3 @@
-PRAGMA foreign_keys = ON;
-PRAGMA journal_mode = WAL;
-
 CREATE TABLE IF NOT EXISTS admins (
   id TEXT PRIMARY KEY,
   email TEXT NOT NULL UNIQUE,

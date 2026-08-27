@@ -6,7 +6,12 @@ dist
 .DS_Store
 *.log
 coverage
+*.tsbuildinfo
+apps/web/vite.config.js
+apps/web/vite.config.d.ts
 
-data/*.db
-data/*.db-shm
-data/*.db-wal
+*.db
+*.db-shm
+*.db-wal
+data/
+backups/
