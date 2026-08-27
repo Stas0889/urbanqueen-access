@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from 'react';
 import {
   Activity, AlertTriangle, Ban, Bot, CheckCircle2, ChevronRight, CircleUserRound,
   Clock3, Copy, Database, KeyRound, LayoutDashboard, Link2, Loader2,
@@ -17,6 +17,13 @@ type DashboardData = {
   mode: 'database' | 'demo';
   stats: { total_users: number; telegram_connected: number; manual_blocked: number; errors?: number };
   chats: ChatStats[];
+};
+type Session = { admin: { id: string; email: string }; csrf: string };
+type IntegrationsData = {
+  appEnv: 'test' | 'production';
+  sqlite: { connected: boolean; wal: boolean; foreignKeys: boolean };
+  getcourse: { configured: boolean; account: string; groups: number[] };
+  telegram: { configured: boolean; mutationsAllowed: boolean };
 };
 type UserChatAccess = {
   chat_id: string; chat_name: string; chat_slug: string;
@@ -42,17 +49,28 @@ const demoChats: ChatStats[] = [
 const fallback: DashboardData = { mode: 'demo', stats: { total_users: 0, telegram_connected: 0, manual_blocked: 0, errors: 0 }, chats: demoChats };
 
 export default function App() {
+  const [session, setSession] = useState<Session | null | undefined>(undefined);
   const [section, setSection] = useState<Section>('dashboard');
   const [dashboard, setDashboard] = useState<DashboardData>(fallback);
   const [users, setUsers] = useState<UserItem[]>([]);
   const [events, setEvents] = useState<EventItem[]>([]);
+  const [integrations, setIntegrations] = useState<IntegrationsData | null>(null);
   const [selected, setSelected] = useState<UserItem | null>(null);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(true);
   const [toast, setToast] = useState<string | null>(null);
 
   const api = async <T,>(url: string, options?: RequestInit): Promise<T> => {
-    const response = await fetch(url, { ...options, headers: { 'Content-Type': 'application/json', ...(options?.headers ?? {}) } });
+    const method = options?.method?.toUpperCase() ?? 'GET';
+    const response = await fetch(url, {
+      ...options,
+      credentials: 'include',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(method !== 'GET' && session?.csrf ? { 'X-CSRF-Token': session.csrf } : {}),
+        ...(options?.headers ?? {}),
+      },
+    });
     if (!response.ok) throw new Error(String(response.status));
     return response.json();
   };
@@ -60,12 +78,17 @@ export default function App() {
   const load = async () => {
     setLoading(true);
     try {
-      const [d, u, e] = await Promise.all([api<DashboardData>('/api/dashboard'), api<UserItem[]>('/api/users'), api<EventItem[]>('/api/events')]);
-      setDashboard(d); setUsers(u); setEvents(e);
+      const [d, u, e, i] = await Promise.all([api<DashboardData>('/api/dashboard'), api<UserItem[]>('/api/users'), api<EventItem[]>('/api/events'), api<IntegrationsData>('/api/integrations')]);
+      setDashboard(d); setUsers(u); setEvents(e); setIntegrations(i);
     } catch { setDashboard(fallback); setUsers([]); setEvents([]); }
     finally { setLoading(false); }
   };
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    fetch('/api/auth/session', { credentials: 'include' })
+      .then(async (response) => response.ok ? setSession(await response.json()) : setSession(null))
+      .catch(() => setSession(null));
+  }, []);
+  useEffect(() => { if (session) load(); }, [session?.admin.id]);
   useEffect(() => { if (!toast) return; const id = setTimeout(() => setToast(null), 2800); return () => clearTimeout(id); }, [toast]);
 
   const filtered = useMemo(() => {
@@ -92,15 +115,22 @@ export default function App() {
     if (!user.personal_access_token) return setToast('Ссылка появится после создания пользователя в базе');
     await navigator.clipboard.writeText(`${location.origin}/join/${user.personal_access_token}`); setToast('Персональная ссылка скопирована');
   };
+  const logout = async () => {
+    await api('/api/auth/logout', { method: 'POST' }).catch(() => undefined);
+    setSession(null);
+  };
 
   const title: Record<Section, [string, string]> = {
     dashboard: ['Обзор', 'Состояние доступа и Telegram-чатов'], users: ['Пользователи', 'GetCourse, Telegram и права доступа'],
     chats: ['Чаты', 'Два пространства и независимые правила доступа'], events: ['События', 'История действий системы'],
-    errors: ['Ошибки', 'События, требующие внимания'], integrations: ['Интеграции', 'GetCourse, Telegram и PostgreSQL'], settings: ['Настройки', 'Правила безопасности и синхронизации'],
+    errors: ['Ошибки', 'События, требующие внимания'], integrations: ['Интеграции', 'GetCourse, Telegram и SQLite'], settings: ['Настройки', 'Правила безопасности и синхронизации'],
   };
 
+  if (session === undefined) return <div className="auth-shell"><Loader2 className="spin" size={30}/></div>;
+  if (session === null) return <Login onAuthenticated={setSession}/>;
+
   return <div className="shell">
-    <Sidebar section={section} onChange={setSection} errors={dashboard.stats.errors ?? 0} />
+    <Sidebar section={section} onChange={setSection} errors={dashboard.stats.errors ?? 0} email={session.admin.email} onLogout={logout} />
     <main className="main">
       <header className="topbar">
         <div><div className="eyebrow">UrbanQueen Access</div><h1>{title[section][0]}</h1><p>{title[section][1]}</p></div>
@@ -115,7 +145,7 @@ export default function App() {
       {section === 'chats' && <Chats chats={dashboard.chats}/>} 
       {section === 'events' && <Events events={events}/>} 
       {section === 'errors' && <Errors events={events.filter((e) => e.level === 'error')}/>} 
-      {section === 'integrations' && <Integrations mode={dashboard.mode}/>} 
+      {section === 'integrations' && <Integrations data={integrations}/>}
       {section === 'settings' && <SettingsPage/>}
     </main>
     {selected && <UserDrawer user={selected} onClose={() => setSelected(null)} onBlock={setManualBlock} onReset={resetTelegram} onCopy={copyLink}/>} 
@@ -123,21 +153,21 @@ export default function App() {
   </div>;
 }
 
-function Sidebar({ section, onChange, errors }: { section: Section; onChange: (s: Section) => void; errors: number }) {
+function Sidebar({ section, onChange, errors, email, onLogout }: { section: Section; onChange: (s: Section) => void; errors: number; email: string; onLogout: () => void }) {
   const items: [Section, string, ReactNode][] = [
     ['dashboard','Обзор',<LayoutDashboard size={19}/>], ['users','Пользователи',<UsersRound size={19}/>], ['chats','Чаты',<MessageCircleMore size={19}/>],
     ['events','События',<Activity size={19}/>], ['errors','Ошибки',<AlertTriangle size={19}/>], ['integrations','Интеграции',<Link2 size={19}/>], ['settings','Настройки',<Settings size={19}/>],
   ];
   return <aside className="sidebar">
     <div className="brand"><div className="brand-mark">UQ</div><div><strong>UrbanQueen</strong><span>Access Control</span></div></div>
-    <nav>{items.map(([id,label,icon]) => <button key={id} className={section === id ? 'nav active' : 'nav'} onClick={() => onChange(id)}>{icon}<span>{label}</span>{id === 'errors' && errors > 0 && <b>{errors}</b>}</button>)}</nav>
-    <div className="sidebar-bottom"><div className="admin"><CircleUserRound size={22}/><div><strong>Администратор</strong><span>UrbanQueen</span></div></div></div>
+    <nav>{items.map(([id,label,icon]) => <button key={id} aria-label={label} className={section === id ? 'nav active' : 'nav'} onClick={() => onChange(id)}>{icon}<span>{label}</span>{id === 'errors' && errors > 0 && <b>{errors}</b>}</button>)}</nav>
+    <div className="sidebar-bottom"><button className="admin admin-button" onClick={onLogout} title="Выйти"><CircleUserRound size={22}/><div><strong>Администратор</strong><span>{email}</span></div></button></div>
   </aside>;
 }
 
 function Dashboard({ data, events }: { data: DashboardData; events: EventItem[] }) {
   return <>
-    {data.mode === 'demo' && <div className="notice"><Database size={18}/><div><strong>Режим подготовки</strong><span>Интерфейс готов. Реальные данные появятся после подключения PostgreSQL и GetCourse.</span></div></div>}
+    {data.mode === 'demo' && <div className="notice"><Database size={18}/><div><strong>API недоступен</strong><span>Проверьте локальный backend и SQLite.</span></div></div>}
     <div className="stats">
       <Stat title="Пользователи" value={data.stats.total_users} detail="в базе" icon={<UsersRound/>}/>
       <Stat title="Telegram связан" value={data.stats.telegram_connected} detail="известен Telegram ID" icon={<Bot/>}/>
@@ -166,11 +196,11 @@ function Chats({ chats }: { chats: ChatStats[] }) {
 function Events({ events }: { events: EventItem[] }) { return <section className="panel">{events.length ? <EventList events={events}/> : <Empty/>}</section>; }
 function Errors({ events }: { events: EventItem[] }) { return <section className="panel">{events.length ? <EventList events={events}/> : <div className="good-empty"><CheckCircle2 size={28}/><strong>Критических ошибок нет</strong><span>Здесь появятся ошибки API, прав бота и рассинхронизации.</span></div>}</section>; }
 
-function Integrations({ mode }: { mode: DashboardData['mode'] }) {
+function Integrations({ data }: { data: IntegrationsData | null }) {
   return <div className="integration-grid">
-    <Integration icon={<Database/>} title="PostgreSQL" status={mode === 'database' ? 'Подключена' : 'Ожидает сервер'} ok={mode === 'database'} rows={[['Хранение','Российский сервер'],['Данные','GC ID ↔ Telegram ID'],['История','Events + Sync Jobs']]}/>
-    <Integration icon={<Link2/>} title="GetCourse" status="Ожидает подключения" rows={[['ВЕДАНИЕ','Group #4825549'],['Гормональный возраст','Group #4900239'],['Webhook','/api/webhooks/getcourse']]}/>
-    <Integration icon={<Bot/>} title="Telegram Bot API" status="Ожидает подключения" rows={[['Webhook','/api/webhooks/telegram'],['Права','Invite + Ban users'],['Вход','Join Request']]}/>
+    <Integration icon={<Database/>} title="SQLite" status={data?.sqlite.connected ? 'Подключена' : 'Недоступна'} ok={data?.sqlite.connected} rows={[['WAL',data?.sqlite.wal ? 'Включён' : 'Нет данных'],['Foreign keys',data?.sqlite.foreignKeys ? 'Включены' : 'Нет данных'],['Среда',data?.appEnv ?? '—']]}/>
+    <Integration icon={<Link2/>} title="GetCourse" status={data?.getcourse.configured ? 'Подключён' : 'Ожидает ключи'} ok={data?.getcourse.configured} rows={[['Аккаунт',data?.getcourse.account ?? '—'],['Группы',data?.getcourse.groups.join(' / ') ?? '—'],['Webhook','/api/webhooks/getcourse']]}/>
+    <Integration icon={<Bot/>} title="Telegram Bot API" status={data?.telegram.configured ? 'Подключён' : 'Ожидает токен'} ok={data?.telegram.configured} rows={[['Webhook','/api/webhooks/telegram'],['Mutations',data?.telegram.mutationsAllowed ? 'Разрешены для среды' : 'Заблокированы'],['Вход','Join Request']]}/>
   </div>;
 }
 
@@ -212,3 +242,37 @@ function Empty({ text='Событий пока нет.' }:{text?:string}) { retu
 function initials(v:string) { return v.split(/\s+/).filter(Boolean).slice(0,2).map((x) => x[0]?.toUpperCase()).join('') || '?'; }
 function date(v?:string|null,time=false) { if(!v) return 'Нет данных'; const d=new Date(v); return Number.isNaN(d.getTime()) ? 'Нет данных' : new Intl.DateTimeFormat('ru-RU',time?{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}:{day:'2-digit',month:'2-digit',year:'numeric'}).format(d); }
 function tgLabel(v:TelegramStatus) { return ({unknown:'Неизвестно',not_connected:'Не связан',member:'В чате',left:'Вышел',banned:'Blacklist',administrator:'Админ',creator:'Владелец'} as Record<TelegramStatus,string>)[v]; }
+
+function Login({ onAuthenticated }: { onAuthenticated: (session: Session) => void }) {
+  const [email, setEmail] = useState('admin@local.test');
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(false);
+  const submit = async (event: FormEvent) => {
+    event.preventDefault();
+    setBusy(true);
+    setError(false);
+    try {
+      const response = await fetch('/api/auth/login', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      });
+      if (!response.ok) throw new Error('login_failed');
+      onAuthenticated(await response.json());
+    } catch {
+      setError(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+  return <div className="auth-shell"><form className="auth-card" onSubmit={submit}>
+    <div className="brand-mark">UQ</div>
+    <div><div className="eyebrow">UrbanQueen Access</div><h1>Вход в управление</h1><p>Доступ только для администратора.</p></div>
+    <label><span>Email</span><input type="email" value={email} onChange={(event) => setEmail(event.target.value)} autoComplete="username" required/></label>
+    <label><span>Пароль</span><input type="password" value={password} onChange={(event) => setPassword(event.target.value)} autoComplete="current-password" required/></label>
+    {error && <div className="auth-error">Неверный email или пароль.</div>}
+    <button className="btn primary full" disabled={busy}>{busy ? <Loader2 className="spin" size={17}/> : <KeyRound size={17}/>}Войти</button>
+  </form></div>;
+}
