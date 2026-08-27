@@ -57,7 +57,7 @@ function field(item: JsonRecord, aliases: string[]) {
   return null;
 }
 
-async function request(url: URL) {
+async function request(url: URL, options: { allowExportPending?: boolean } = {}) {
   const response = await fetch(url, {
     headers: { Accept: 'application/json' },
     signal: AbortSignal.timeout(15_000),
@@ -71,6 +71,11 @@ async function request(url: URL) {
   if (!value) throw new Error('getcourse_invalid_response');
   if (value.success === false || value.success === 'false') {
     const message = field(value, ['error_message', 'error', 'message']) ?? 'request_failed';
+    const normalizedMessage = normalizeKey(message);
+    if (options.allowExportPending && (
+      normalizedMessage.includes('файл еще не создан')
+      || normalizedMessage.includes('file is not ready')
+    )) return value;
     throw new Error(`getcourse_error:${message}`);
   }
   return value;
@@ -98,7 +103,7 @@ export async function getCourseUserByEmail(email: string): Promise<GetCourseUser
   resultUrl.searchParams.set('key', config.getcourseApiKey);
   for (let attempt = 0; attempt < 10; attempt += 1) {
     if (attempt) await new Promise((resolve) => setTimeout(resolve, 2_000));
-    const result = await request(resultUrl);
+    const result = await request(resultUrl, { allowExportPending: true });
     const exported = rows(result);
     if (exported === null) continue;
     const item = exported[0];
