@@ -5,6 +5,21 @@
 ## Preview
 Интерактивный макет админки: `preview/index.html`.
 
+## Local development
+
+```bash
+npm install
+npm run dev
+```
+
+Frontend: `http://localhost:5173`
+API: `http://localhost:4100`
+
+Без `.env` приложение запускается только в безопасном режиме `APP_ENV=test`.
+Локальная учётная запись: `admin@local.test`; пароль:
+`local-development-only`. Перед любой общей или production-средой задайте
+собственные `ADMIN_PASSWORD` и `JWT_SECRET`.
+
 ## Stack
 - React + TypeScript
 - Node.js + Fastify
@@ -21,6 +36,9 @@
 
 SQLite работает в режиме WAL, включены foreign keys и `busy_timeout` для устойчивой работы webhook-запросов.
 
+Схема применяется последовательно из `db/migrations`; выполненные миграции
+фиксируются в `schema_migrations`.
+
 Файлы `.db`, `.db-wal` и `.db-shm` исключены из Git.
 
 ## Access rules
@@ -34,4 +52,26 @@ SQLite работает в режиме WAL, включены foreign keys и `b
 - технический ban после окончания оплаты снимается автоматически при восстановлении доступа.
 
 ## Backup
-На production-сервере необходимо настроить ежедневную резервную копию `access.db` в хранилище на территории РФ. При создании backup приложение должно использовать безопасный SQLite backup/копирование после checkpoint, чтобы копия была консистентной.
+
+`scripts/backup-db.sh` создаёт согласованную копию через SQLite `.backup`,
+назначает права `0600` и удаляет копии старше заданного срока. На production
+скрипт следует запускать отдельным systemd timer/cron и затем переносить копию
+в согласованное российское backup-хранилище.
+
+## Safety boundary
+
+- Telegram worker стартует только когда заданы bot token и webhook secret.
+- В production любые ban/unban/invite/approve/decline заблокированы, пока
+  `ALLOW_PRODUCTION_TELEGRAM_MUTATIONS=true` не включён явно.
+- Во время разработки реальные Telegram chat ID не задаются.
+- GetCourse webhook принимает запросы только с правильным `X-Access-Secret`.
+- Telegram webhook проверяет `X-Telegram-Bot-Api-Secret-Token`.
+
+## Production files
+
+- `deploy/nginx-access.urban-queen.com.conf`
+- `deploy/urbanqueen-access.service`
+- `deploy/access.env.example`
+
+HTTPS выпускается Certbot после настройки DNS. Сначала проект проверяется на
+тестовом Telegram-чате; существующий GetCourse-контроллер не отключается.
