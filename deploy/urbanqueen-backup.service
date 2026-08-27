@@ -1,0 +1,14 @@
+[Unit]
+Description=UrbanQueen Access SQLite backup
+After=urbanqueen-access.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/urbanqueen-access/scripts/backup-db.sh
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/backups/urbanqueen
+
