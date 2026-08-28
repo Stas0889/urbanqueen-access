@@ -24,15 +24,9 @@ function json(body, status = 200) {
 async function secretsEqual(left, right) {
   if (!left || !right) return false;
   const encoder = new TextEncoder();
-  const [leftHash, rightHash] = await Promise.all([
-    crypto.subtle.digest('SHA-256', encoder.encode(left)),
-    crypto.subtle.digest('SHA-256', encoder.encode(right)),
-  ]);
-  const a = new Uint8Array(leftHash);
-  const b = new Uint8Array(rightHash);
-  let difference = a.length ^ b.length;
-  for (let index = 0; index < Math.min(a.length, b.length); index += 1) difference |= a[index] ^ b[index];
-  return difference === 0;
+  const a = encoder.encode(left);
+  const b = encoder.encode(right);
+  return a.length === b.length && crypto.subtle.timingSafeEqual(a, b);
 }
 
 function allowedChatIds(value) {
