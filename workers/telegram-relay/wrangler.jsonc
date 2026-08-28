@@ -1,0 +1,14 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "urbanqueen-telegram-relay",
+  "main": "src/index.js",
+  "compatibility_date": "2026-08-28",
+  "workers_dev": true,
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    "ORIGIN_WEBHOOK_URL": "https://access.urban-queen.com/api/webhooks/telegram",
+    "ALLOWED_CHAT_IDS": "-1003872347411"
+  }
+}

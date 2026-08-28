@@ -14,10 +14,17 @@ async function callTelegram<T>(method: string, body: Record<string, unknown>, mu
   if (mutationChatId !== undefined && !config.isAllowedTelegramMutation(mutationChatId)) {
     throw new Error(`telegram_mutation_not_allowed_for_chat:${mutationChatId}`);
   }
-  if (!config.telegramBotToken) throw new Error('telegram_not_configured');
-  const response = await fetch(`${config.telegramApiBaseUrl}/bot${config.telegramBotToken}/${method}`, {
+  const relayConfigured = Boolean(config.telegramRelayBaseUrl && config.telegramRelaySecret);
+  if (!relayConfigured && !config.telegramBotToken) throw new Error('telegram_not_configured');
+  const endpoint = relayConfigured
+    ? `${config.telegramRelayBaseUrl}/api/${method}`
+    : `${config.telegramApiBaseUrl}/bot${config.telegramBotToken}/${method}`;
+  const response = await fetch(endpoint, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(relayConfigured ? { Authorization: `Bearer ${config.telegramRelaySecret}` } : {}),
+    },
     body: JSON.stringify(body),
     signal: AbortSignal.timeout(12_000),
   });
