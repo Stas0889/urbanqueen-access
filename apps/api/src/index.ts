@@ -364,11 +364,11 @@ async function joinHandler(request: FastifyRequest, reply: FastifyReply) {
     token: z.string().min(32).max(128),
     chatSlug: z.string().min(1).max(100).optional(),
   }).safeParse(request.params);
-  if (!params.success) return reply.code(404).type('text/plain').send('Ссылка недействительна.');
+  if (!params.success) return reply.code(404).type('text/plain; charset=utf-8').send('Ссылка недействительна.');
   const user = db.prepare(`SELECT id, manual_block, telegram_user_id FROM users WHERE personal_access_token = ?`)
     .get(params.data.token) as { id: string; manual_block: number; telegram_user_id: number | null } | undefined;
-  if (!user) return reply.code(404).type('text/plain').send('Ссылка недействительна.');
-  if (user.manual_block) return reply.code(403).type('text/plain').send('Доступ временно ограничен администратором.');
+  if (!user) return reply.code(404).type('text/plain; charset=utf-8').send('Ссылка недействительна.');
+  if (user.manual_block) return reply.code(403).type('text/plain; charset=utf-8').send('Доступ временно ограничен администратором.');
 
   const chats = (db.prepare(`
     SELECT c.id, c.name, c.slug, c.telegram_chat_id
@@ -378,7 +378,7 @@ async function joinHandler(request: FastifyRequest, reply: FastifyReply) {
     ORDER BY c.created_at
   `).all(user.id, params.data.chatSlug ?? null, params.data.chatSlug ?? null) as Array<{ id: string; name: string; slug: string; telegram_chat_id: number }>)
     .filter((chat) => config.isAllowedTelegramMutation(chat.telegram_chat_id));
-  if (!chats.length) return reply.code(403).type('text/plain').send('Активный доступ к Telegram-чату не найден.');
+  if (!chats.length) return reply.code(403).type('text/plain; charset=utf-8').send('Активный доступ к Telegram-чату не найден.');
   if (chats.length > 1 && !params.data.chatSlug) {
     const links = chats.map((chat) => `<li><a href="/join/${encodeURIComponent(params.data.token)}/${encodeURIComponent(chat.slug)}">${escapeHtml(chat.name)}</a></li>`).join('');
     return reply.type('text/html; charset=utf-8').send(`<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Выберите чат</title><style>body{font-family:Montserrat,Arial,sans-serif;max-width:640px;margin:12vh auto;padding:24px;color:#11140B}a{display:block;padding:16px;border:1px solid #dfe8e5;border-radius:10px;color:#047865;text-decoration:none;margin:10px 0}ul{list-style:none;padding:0}</style><h1>Выберите Telegram-чат</h1><ul>${links}</ul></html>`);
@@ -407,7 +407,7 @@ async function joinHandler(request: FastifyRequest, reply: FastifyReply) {
     request.log.error({ error, userId: user.id, chatId: chat.id }, 'Join link creation failed');
     db.prepare(`INSERT INTO events (user_id, chat_id, source, level, event_type, message, created_at) VALUES (?, ?, 'telegram', 'error', 'TELEGRAM_SYNC_ERROR', 'Не удалось создать временную Telegram-ссылку', ?)`)
       .run(user.id, chat.id, nowIso());
-    return reply.code(503).type('text/plain').send('Telegram временно недоступен. Попробуйте ещё раз через несколько минут.');
+    return reply.code(503).type('text/plain; charset=utf-8').send('Telegram временно недоступен. Попробуйте ещё раз через несколько минут.');
   }
 }
 
