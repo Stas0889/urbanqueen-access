@@ -8,6 +8,7 @@ export type TelegramChatMember = {
   can_invite_users?: boolean;
   can_restrict_members?: boolean;
 };
+export type TelegramUpdate = Record<string, unknown> & { update_id: number };
 
 async function callTelegram<T>(method: string, body: Record<string, unknown>, mutationChatId?: number): Promise<T> {
   if (mutationChatId !== undefined && !config.isAllowedTelegramMutation(mutationChatId)) {
@@ -31,6 +32,16 @@ async function callTelegram<T>(method: string, body: Record<string, unknown>, mu
 export const telegram = {
   getMe() {
     return callTelegram<TelegramBotIdentity>('getMe', {});
+  },
+  getUpdates(offset?: number) {
+    return callTelegram<TelegramUpdate[]>('getUpdates', {
+      ...(offset === undefined ? {} : { offset }),
+      timeout: 8,
+      allowed_updates: ['chat_join_request'],
+    });
+  },
+  deleteWebhook() {
+    return callTelegram<boolean>('deleteWebhook', { drop_pending_updates: false });
   },
   getChatMember(chatId: number, userId: number) {
     return callTelegram<TelegramChatMember>('getChatMember', { chat_id: chatId, user_id: userId });

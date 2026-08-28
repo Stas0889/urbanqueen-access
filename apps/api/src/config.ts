@@ -25,6 +25,7 @@ const envSchema = z.object({
   TELEGRAM_BOT_TOKEN: z.string().default(''),
   TELEGRAM_WEBHOOK_SECRET: z.string().default(''),
   TELEGRAM_API_BASE_URL: z.string().url().default('https://api.telegram.org'),
+  TELEGRAM_UPDATE_MODE: z.enum(['webhook', 'polling']).default('webhook'),
   TELEGRAM_TEST_CHAT_IDS: z.preprocess(telegramChatIds, z.array(z.number().int().safe())).default([]),
   ALLOW_PRODUCTION_TELEGRAM_MUTATIONS: booleanValue.default(false),
 });
@@ -54,10 +55,13 @@ export const config = {
   telegramBotToken: parsed.TELEGRAM_BOT_TOKEN,
   telegramWebhookSecret: parsed.TELEGRAM_WEBHOOK_SECRET,
   telegramApiBaseUrl: parsed.TELEGRAM_API_BASE_URL.replace(/\/$/, ''),
+  telegramUpdateMode: parsed.TELEGRAM_UPDATE_MODE,
   telegramTestChatIds: parsed.TELEGRAM_TEST_CHAT_IDS,
   allowProductionTelegramMutations: parsed.ALLOW_PRODUCTION_TELEGRAM_MUTATIONS,
   get isProduction() { return this.appEnv === 'production'; },
-  get telegramConfigured() { return Boolean(this.telegramBotToken && this.telegramWebhookSecret); },
+  get telegramConfigured() {
+    return Boolean(this.telegramBotToken && (this.telegramUpdateMode === 'polling' || this.telegramWebhookSecret));
+  },
   get getcourseApiConfigured() { return Boolean(this.getcourseApiKey); },
   get getcourseConfigured() { return Boolean(this.getcourseApiKey && this.getcourseWebhookSecret); },
   isAllowedTelegramMutation(chatId: number) {

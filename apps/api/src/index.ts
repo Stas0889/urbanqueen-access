@@ -13,7 +13,7 @@ import { db, nowIso, sqliteInfo } from './db.js';
 import { getCourseUserByEmail } from './getcourse-client.js';
 import { applyGetCourseAccessUpdate } from './getcourse.js';
 import { telegram } from './telegram.js';
-import { startWorker } from './worker.js';
+import { startTelegramPolling, startWorker } from './worker.js';
 
 const app = Fastify({
   logger: true,
@@ -426,6 +426,9 @@ if (!config.isProduction) {
   });
 }
 
-if (config.telegramConfigured) startWorker(app.log);
+if (config.telegramConfigured) {
+  startWorker(app.log);
+  if (config.telegramUpdateMode === 'polling') await startTelegramPolling(app.log);
+}
 
 await app.listen({ port: config.port, host: config.host });

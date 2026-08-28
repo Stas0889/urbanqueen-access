@@ -6,6 +6,8 @@ import { telegram, type TelegramMemberStatus } from './telegram.js';
 const retrySeconds = [30, 120, 600, 3600];
 let timer: NodeJS.Timeout | undefined;
 let running = false;
+let pollingTimer: NodeJS.Timeout | undefined;
+let polling = false;
 
 type Job = { id: number; job_type: string; payload: string | null; attempts: number; max_attempts: number };
 type ReconcileRow = {
@@ -172,4 +174,36 @@ export function startWorker(log: FastifyBaseLogger) {
   timer = setInterval(() => void tick(log), 2_000);
   timer.unref();
   void tick(log);
+}
+
+async function pollTelegram(log: FastifyBaseLogger) {
+  if (polling) return;
+  polling = true;
+  try {
+    const last = db.prepare('SELECT MAX(update_id) AS update_id FROM telegram_updates')
+      .get() as { update_id: number | null };
+    const updates = await telegram.getUpdates(last.update_id === null ? undefined : last.update_id + 1);
+    for (const update of updates) {
+      const timestamp = nowIso();
+      const accepted = db.prepare('INSERT OR IGNORE INTO telegram_updates (update_id, received_at) VALUES (?, ?)')
+        .run(update.update_id, timestamp);
+      if (accepted.changes === 0) continue;
+      db.prepare(`INSERT INTO events (source, level, event_type, message, created_at) VALUES ('telegram', 'info', 'TELEGRAM_POLL_RECEIVED', 'Получено обновление Telegram polling', ?)`)
+        .run(timestamp);
+      db.prepare(`INSERT INTO sync_jobs (job_type, payload, run_after, created_at, updated_at) VALUES ('TELEGRAM_UPDATE', ?, ?, ?, ?)`)
+        .run(JSON.stringify(update), timestamp, timestamp, timestamp);
+    }
+  } catch (error) {
+    log.error({ error }, 'Telegram polling failed');
+  } finally {
+    polling = false;
+    pollingTimer = setTimeout(() => void pollTelegram(log), 1_000);
+    pollingTimer.unref();
+  }
+}
+
+export async function startTelegramPolling(log: FastifyBaseLogger) {
+  if (pollingTimer || polling) return;
+  await telegram.deleteWebhook();
+  void pollTelegram(log);
 }
