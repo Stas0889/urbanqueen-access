@@ -11,6 +11,7 @@ import { bootstrapAdmin, registerAuthRoutes, requireAdmin, requireAdminMutation 
 import { config } from './config.js';
 import { db, nowIso, sqliteInfo } from './db.js';
 import { getCourseUserByEmail } from './getcourse-client.js';
+import { runGetCourseAudit, startGetCourseAudit } from './getcourse-audit.js';
 import { applyGetCourseAccessUpdate } from './getcourse.js';
 import { telegram } from './telegram.js';
 import { startTelegramPolling, startWorker } from './worker.js';
@@ -237,6 +238,12 @@ app.post('/api/sync', { preHandler: requireAdminMutation }, async () => {
   return { ok: true, queued: true };
 });
 
+app.post('/api/getcourse/audit', { preHandler: requireAdminMutation }, async (_request, reply) => {
+  if (config.getcourseAuditScope === 'off') return reply.code(409).send({ error: 'getcourse_audit_disabled' });
+  try { return await runGetCourseAudit(app.log); }
+  catch (error) { return reply.code(502).send({ error: error instanceof Error ? error.message : 'getcourse_audit_failed' }); }
+});
+
 app.post('/api/test-sync/getcourse-user', { preHandler: requireAdminMutation }, async (request, reply) => {
   const input = z.object({
     email: z.string().email().optional(),
@@ -430,5 +437,6 @@ if (config.telegramConfigured) {
   startWorker(app.log);
   if (config.telegramUpdateMode === 'polling') await startTelegramPolling(app.log);
 }
+startGetCourseAudit(app.log);
 
 await app.listen({ port: config.port, host: config.host });

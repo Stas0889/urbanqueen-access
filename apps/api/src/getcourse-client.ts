@@ -88,12 +88,27 @@ export type GetCourseUserSnapshot = {
   groupIds: number[];
 };
 
-export async function getCourseUserByEmail(email: string): Promise<GetCourseUserSnapshot | null> {
+function snapshot(item: JsonRecord): GetCourseUserSnapshot {
+  const rawId = field(item, ['id', 'user_id', 'ID пользователя']);
+  const exportedEmail = field(item, ['email', 'e-mail', 'эл. почта', 'электронная почта']);
+  if (!rawId || !exportedEmail || !Number.isSafeInteger(Number(rawId))) throw new Error('getcourse_user_fields_missing');
+  const groups = field(item, ['idgrouplist', 'group_ids', 'id групп пользователя', 'ID групп пользователя']) ?? '';
+  const firstName = field(item, ['name', 'first_name', 'имя']);
+  const lastName = field(item, ['last_name', 'фамилия']);
+  return {
+    userId: Number(rawId),
+    email: exportedEmail.toLowerCase(),
+    name: [firstName, lastName].filter(Boolean).join(' ') || null,
+    groupIds: groups.split(',').map((value) => Number(value.trim().split(':')[0])).filter(Number.isSafeInteger),
+  };
+}
+
+async function exportUsersByEmails(emails: string[]): Promise<GetCourseUserSnapshot[]> {
   if (!config.getcourseApiKey) throw new Error('getcourse_api_key_missing');
   const base = `https://${config.getcourseAccount}.getcourse.ru/pl/api/account`;
   const startUrl = new URL(`${base}/users`);
   startUrl.searchParams.set('key', config.getcourseApiKey);
-  startUrl.searchParams.set('email', email);
+  startUrl.searchParams.set('email', emails.join(','));
   startUrl.searchParams.set('idgrouplist', 'id');
   const started = await request(startUrl);
   const id = exportId(started);
@@ -101,25 +116,30 @@ export async function getCourseUserByEmail(email: string): Promise<GetCourseUser
 
   const resultUrl = new URL(`${base}/exports/${encodeURIComponent(id)}`);
   resultUrl.searchParams.set('key', config.getcourseApiKey);
-  for (let attempt = 0; attempt < 10; attempt += 1) {
-    if (attempt) await new Promise((resolve) => setTimeout(resolve, 2_000));
+  // Exports are asynchronous and may need close to a minute on a busy account.
+  // Poll slowly because every status check counts toward the rolling API limit.
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    if (attempt) await new Promise((resolve) => setTimeout(resolve, 15_000));
     const result = await request(resultUrl, { allowExportPending: true });
     const exported = rows(result);
     if (exported === null) continue;
-    const item = exported[0];
-    if (!item) return null;
-    const rawId = field(item, ['id', 'user_id', 'ID пользователя']);
-    const exportedEmail = field(item, ['email', 'e-mail', 'эл. почта', 'электронная почта']);
-    if (!rawId || !exportedEmail || !Number.isSafeInteger(Number(rawId))) throw new Error('getcourse_user_fields_missing');
-    const groups = field(item, ['idgrouplist', 'group_ids', 'id групп пользователя', 'ID групп пользователя']) ?? '';
-    const firstName = field(item, ['name', 'first_name', 'имя']);
-    const lastName = field(item, ['last_name', 'фамилия']);
-    return {
-      userId: Number(rawId),
-      email: exportedEmail.toLowerCase(),
-      name: [firstName, lastName].filter(Boolean).join(' ') || null,
-      groupIds: groups.split(',').map((value) => Number(value.trim().split(':')[0])).filter(Number.isSafeInteger),
-    };
+    return exported.map(snapshot);
   }
   throw new Error('getcourse_export_timeout');
+}
+
+export async function getCourseUsersByEmails(rawEmails: string[]): Promise<GetCourseUserSnapshot[]> {
+  const emails = [...new Set(rawEmails.map((email) => email.trim().toLowerCase()).filter(Boolean))];
+  const result: GetCourseUserSnapshot[] = [];
+  // Keep URLs modest and Export API calls serial: GetCourse processes one export at a time.
+  for (let offset = 0; offset < emails.length; offset += 50) {
+    result.push(...await exportUsersByEmails(emails.slice(offset, offset + 50)));
+  }
+  return result;
+}
+
+export async function getCourseUserByEmail(email: string): Promise<GetCourseUserSnapshot | null> {
+  const normalized = email.trim().toLowerCase();
+  const users = await getCourseUsersByEmails([normalized]);
+  return users.find((user) => user.email === normalized) ?? null;
 }

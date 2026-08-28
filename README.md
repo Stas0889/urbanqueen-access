@@ -73,7 +73,7 @@ SQLite работает в режиме WAL, включены foreign keys и `b
 
 ## Test integration
 
-- GetCourse rule: group `4938193`, environment `test`.
+- GetCourse rule: clean group `4939538` (`TEST | UrbanQueen Access | Чистая`), environment `test`.
 - Telegram test chat: `-1003872347411`.
 - В разделе «Интеграции» можно вручную сверить одного пользователя по email.
 - После безопасной записи bot token и webhook secret в production env команда
@@ -86,6 +86,13 @@ SQLite работает в режиме WAL, включены foreign keys и `b
   сохранить этот текстовый ответ в дополнительное поле пользователя. Callback
   работает только для Telegram-чатов, разрешённых safety allowlist.
 - Telegram webhook проверяет `X-Telegram-Bot-Api-Secret-Token`.
+- Автоматическая страховочная сверка известных пользователей с фактическим составом групп GetCourse включается через `GETCOURSE_AUDIT_SCOPE=test` и исправляет пропущенные повторные добавления/удаления. Рекомендуемый интервал — 30 минут; готовность асинхронной выгрузки проверяется не чаще раза в 15 секунд, а при достижении лимита Export API сервис автоматически отступает на два часа. По умолчанию сверка выключена; `all` разрешается только после отдельного production-подтверждения.
+
+## Required before production launch
+
+- Replace the current GetCourse grant mission with a repeatable event-based flow (or an equivalent repeat-safe flow). A periodic mission creates only one task per user and therefore does not automatically grant access again after the same user leaves and later rejoins the group.
+- Verify the full renewal scenario on the test group: grant access, join Telegram, remove from GetCourse group, confirm Telegram removal, add the same user again, confirm automatic unban and successful reuse of the permanent personal link without a manually created task.
+- Do not connect or mutate either production group/chat until this repeat-activation test passes and production Telegram mutations are separately approved.
 
 ## Production files
 
