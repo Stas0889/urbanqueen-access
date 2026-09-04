@@ -3,6 +3,7 @@ import { config } from './config.js';
 import { db, nowIso } from './db.js';
 import { applyGetCourseAccessUpdate } from './getcourse.js';
 import { getCourseUsersByEmails } from './getcourse-client.js';
+import { openIncident, resolveIncidents } from './incidents.js';
 
 type KnownUser = { getcourse_user_id: number; email: string; name: string | null };
 type AuditedChat = { id: string; getcourse_group_id: number; environment: 'test' | 'production' };
@@ -58,15 +59,24 @@ export async function runGetCourseAudit(log: FastifyBaseLogger) {
 
     const timestamp = nowIso();
     for (const chat of chats) db.prepare('UPDATE chats SET last_sync_at = ?, updated_at = ? WHERE id = ?').run(timestamp, timestamp, chat.id);
+    const resolved = resolveIncidents({ source: 'getcourse', eventType: 'GETCOURSE_AUDIT_ERROR' });
+    if (resolved > 0) {
+      db.prepare(`
+        INSERT INTO events (source, level, event_type, message, payload, created_at)
+        VALUES ('getcourse', 'info', 'GETCOURSE_AUDIT_RECOVERED', 'Сверка GetCourse снова работает', ?, ?)
+      `).run(JSON.stringify({ resolved_incidents: resolved }), timestamp);
+    }
     log.info({ scope: config.getcourseAuditScope, checked: snapshots.length, changed, missing }, 'GetCourse access audit completed');
     return { ok: true, checked: snapshots.length, changed, missing } as const;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     log.error({ error: message }, 'GetCourse access audit failed');
-    db.prepare(`
-      INSERT INTO events (source, level, event_type, message, payload, created_at)
-      VALUES ('getcourse', 'error', 'GETCOURSE_AUDIT_ERROR', 'Автоматическая сверка GetCourse завершилась ошибкой', ?, ?)
-    `).run(JSON.stringify({ error: message }), nowIso());
+    openIncident({
+      source: 'getcourse',
+      eventType: 'GETCOURSE_AUDIT_ERROR',
+      message: 'Автоматическая сверка GetCourse завершилась ошибкой',
+      payload: { error: message },
+    });
     throw error;
   } finally {
     running = false;
@@ -83,9 +93,13 @@ export function startGetCourseAudit(log: FastifyBaseLogger) {
       catch (error) {
         const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
         // Export API is capped per rolling two-hour window. Back off instead of retrying into the limit.
+        const exportIsBusy = message.includes('уже запущен один экспорт') || message.includes('export already');
+        const exportTimedOut = message.includes('getcourse_export_timeout');
         nextDelay = message.includes('слишком много запросов') || message.includes('too many requests')
           ? Math.max(intervalMs, 2 * 60 * 60_000)
-          : Math.max(intervalMs, 15 * 60_000);
+          : exportIsBusy || exportTimedOut
+            ? Math.max(intervalMs, 60 * 60_000)
+            : Math.max(intervalMs, 15 * 60_000);
       }
       schedule(nextDelay);
     }, delay);

@@ -13,6 +13,7 @@ import { db, nowIso, sqliteInfo } from './db.js';
 import { getCourseUserByEmail } from './getcourse-client.js';
 import { runGetCourseAudit, startGetCourseAudit } from './getcourse-audit.js';
 import { applyGetCourseAccessUpdate } from './getcourse.js';
+import { openIncident, resolveIncidents } from './incidents.js';
 import { telegram } from './telegram.js';
 import { startTelegramPolling, startWorker } from './worker.js';
 
@@ -184,10 +185,11 @@ app.post('/api/users/:id/reset-telegram', { preHandler: requireAdminMutation }, 
 });
 
 app.get('/api/events', { preHandler: requireAdmin }, async () => db.prepare(`
-  SELECT e.id, e.created_at, e.source, e.level, e.event_type, e.message, e.resolved_at,
+  SELECT e.id, e.created_at, e.last_occurred_at, e.occurrence_count,
+    e.source, e.level, e.event_type, e.message, e.resolved_at,
     u.name AS user_name, u.email AS user_email, c.name AS chat_name
   FROM events e LEFT JOIN users u ON u.id = e.user_id LEFT JOIN chats c ON c.id = e.chat_id
-  ORDER BY e.created_at DESC LIMIT 250
+  ORDER BY COALESCE(e.last_occurred_at, e.created_at) DESC LIMIT 250
 `).all());
 
 app.get('/api/integrations', { preHandler: requireAdmin }, async () => {
@@ -409,11 +411,17 @@ async function joinHandler(request: FastifyRequest, reply: FastifyReply) {
       .run(randomUUID(), user.id, chat.id, invite.invite_link, `uq-${user.id.slice(0, 8)}`, expiresAt.toISOString(), nowIso());
     db.prepare(`INSERT INTO events (user_id, chat_id, source, level, event_type, message, created_at) VALUES (?, ?, 'telegram', 'info', 'INVITE_CREATED', 'Создана временная Telegram-ссылка', ?)`)
       .run(user.id, chat.id, nowIso());
+    resolveIncidents({ source: 'telegram', eventType: 'TELEGRAM_SYNC_ERROR', userId: user.id, chatId: chat.id });
     return reply.redirect(invite.invite_link);
   } catch (error) {
     request.log.error({ error, userId: user.id, chatId: chat.id }, 'Join link creation failed');
-    db.prepare(`INSERT INTO events (user_id, chat_id, source, level, event_type, message, created_at) VALUES (?, ?, 'telegram', 'error', 'TELEGRAM_SYNC_ERROR', 'Не удалось создать временную Telegram-ссылку', ?)`)
-      .run(user.id, chat.id, nowIso());
+    openIncident({
+      source: 'telegram',
+      eventType: 'TELEGRAM_SYNC_ERROR',
+      message: 'Не удалось создать временную Telegram-ссылку',
+      userId: user.id,
+      chatId: chat.id,
+    });
     return reply.code(503).type('text/plain; charset=utf-8').send('Telegram временно недоступен. Попробуйте ещё раз через несколько минут.');
   }
 }

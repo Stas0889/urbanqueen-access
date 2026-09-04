@@ -45,6 +45,7 @@ type UserItem = {
 type EventItem = {
   id: number | string; created_at: string; source: 'system' | 'getcourse' | 'telegram' | 'admin';
   level: 'info' | 'warning' | 'error'; event_type: string; message: string;
+  resolved_at?: string | null; last_occurred_at?: string | null; occurrence_count?: number;
   user_name?: string | null; user_email?: string | null; chat_name?: string | null;
 };
 
@@ -163,7 +164,7 @@ export default function App() {
       {section === 'users' && <Users users={filtered} onOpen={openUser}/>} 
       {section === 'chats' && <Chats chats={dashboard.chats}/>} 
       {section === 'events' && <Events events={events}/>} 
-      {section === 'errors' && <Errors events={events.filter((e) => e.level === 'error')}/>} 
+      {section === 'errors' && <Errors events={events.filter((e) => e.level === 'error' && !e.resolved_at)}/>}
       {section === 'integrations' && <Integrations data={integrations} onSyncTestUser={syncTestUser}/>}
       {section === 'settings' && <SettingsPage/>}
     </main>
@@ -191,7 +192,7 @@ function Dashboard({ data, events }: { data: DashboardData; events: EventItem[] 
       <Stat title="Пользователи" value={data.stats.total_users} detail="в базе" icon={<UsersRound/>}/>
       <Stat title="Telegram связан" value={data.stats.telegram_connected} detail="известен Telegram ID" icon={<Bot/>}/>
       <Stat title="Ручной stop-list" value={data.stats.manual_blocked} detail="не снимается оплатой" icon={<Ban/>}/>
-      <Stat title="Ошибки" value={data.stats.errors ?? 0} detail="за последние 7 дней" icon={<AlertTriangle/>}/>
+      <Stat title="Ошибки" value={data.stats.errors ?? 0} detail="требуют внимания" icon={<AlertTriangle/>}/>
     </div>
     <div className="section-title"><div><h2>Telegram-чаты</h2><p>Доступ считается отдельно для каждого чата.</p></div></div>
     <div className="chat-grid">{data.chats.map((chat, i) => <ChatCard key={chat.id} chat={chat} index={i + 1}/>)}</div>
@@ -278,7 +279,7 @@ function UserDrawer({ user, onClose, onBlock, onReset, onCopy }: { user: UserIte
 function Stat({ title, value, detail, icon }: { title:string; value:number; detail:string; icon:ReactNode }) { return <div className="stat"><div className="stat-icon">{icon}</div><span>{title}</span><strong>{value}</strong><small>{detail}</small></div>; }
 function ChatCard({ chat, index }: { chat:ChatStats; index:number }) { return <article className="chat-card"><div className="chat-top"><div className="chat-number">0{index}</div><div className="chat-badges">{chat.environment === 'test' && <span className="pill test">TEST</span>}<span className={`pill ${chat.telegram_chat_id ? 'success' : 'warning'}`}>{chat.telegram_chat_id ? 'Telegram подключён' : 'Нужно подключить'}</span></div></div><h3>{chat.name}</h3><div className="group-id"><span>GetCourse group</span><strong>#{chat.getcourse_group_id}</strong></div><div className="metrics"><Metric value={chat.active_access} label="Активный доступ"/><Metric value={chat.telegram_members} label="В Telegram"/><Metric value={chat.not_connected} label="Не связаны"/><Metric value={chat.banned} label="Blacklist"/></div></article>; }
 function Metric({ value,label }:{value:number;label:string}) { return <div><strong>{value}</strong><span>{label}</span></div>; }
-function EventList({ events }:{events:EventItem[]}) { return <div className="event-list">{events.map((e) => <div className="event-row" key={e.id}><div className={`event-dot ${e.level}`}>{e.level === 'error' ? <AlertTriangle size={15}/> : e.level === 'warning' ? <Clock3 size={15}/> : <CheckCircle2 size={15}/>}</div><div><strong>{e.message}</strong><span>{[e.user_email,e.chat_name].filter(Boolean).join(' · ') || e.event_type}</span></div><time>{date(e.created_at,true)}</time></div>)}</div>; }
+function EventList({ events }:{events:EventItem[]}) { return <div className="event-list">{events.map((e) => <div className="event-row" key={e.id}><div className={`event-dot ${e.level}`}>{e.level === 'error' ? <AlertTriangle size={15}/> : e.level === 'warning' ? <Clock3 size={15}/> : <CheckCircle2 size={15}/>}</div><div><strong>{e.message}</strong><span>{[e.user_email,e.chat_name].filter(Boolean).join(' · ') || e.event_type}{(e.occurrence_count ?? 1) > 1 ? ` · повторилось ${e.occurrence_count} раз` : ''}</span></div><time>{date(e.last_occurred_at || e.created_at,true)}</time></div>)}</div>; }
 function Integration({ icon,title,status,ok=false,rows }:{icon:ReactNode;title:string;status:string;ok?:boolean;rows:[string,string][]}) { return <section className="panel integration"><div className="integration-head"><div className="integration-icon">{icon}</div><div><h3>{title}</h3><span className={`pill ${ok ? 'success' : 'warning'}`}>{status}</span></div></div>{rows.map(([k,v]) => <div className="config" key={k}><span>{k}</span><strong>{v}</strong></div>)}</section>; }
 function Rule({icon,title,text}:{icon:ReactNode;title:string;text:string}) { return <div className="rule"><div>{icon}</div><p><strong>{title}</strong><span>{text}</span></p></div>; }
 function DrawerSection({ title,children }:{title:string;children:ReactNode}) { return <section className="drawer-section"><h4>{title}</h4>{children}</section>; }
