@@ -9,6 +9,10 @@ const tempDirectory = mkdtempSync(join(tmpdir(), 'uq-access-test-'));
 const databasePath = join(tempDirectory, 'access.db');
 const testChatId = -1003872347411;
 const testGroupId = 4939538;
+const vedanieChatId = -1001755248719;
+const vedanieGroupId = 4825549;
+const hormonalChatId = -1003964804598;
+const hormonalGroupId = 4900239;
 const webhookSecret = 'repeat-safe-webhook-secret';
 const telegramSecret = 'repeat-safe-telegram-secret';
 const adminPassword = 'repeat-safe-admin-password';
@@ -108,10 +112,20 @@ function clearRuntimeData() {
   `);
   db.prepare(`
     UPDATE chats
-    SET telegram_chat_id = CASE WHEN getcourse_group_id = ? THEN ? ELSE NULL END,
+    SET telegram_chat_id = CASE
+          WHEN getcourse_group_id = ? THEN ?
+          WHEN getcourse_group_id = ? THEN ?
+          WHEN getcourse_group_id = ? THEN ?
+          ELSE NULL
+        END,
         is_enabled = 1,
         environment = CASE WHEN getcourse_group_id = ? THEN 'test' ELSE 'production' END
-  `).run(testGroupId, testChatId, testGroupId);
+  `).run(
+    testGroupId, testChatId,
+    vedanieGroupId, vedanieChatId,
+    hormonalGroupId, hormonalChatId,
+    testGroupId,
+  );
   telegramState.clear();
   telegramCalls.length = 0;
   inviteCounter = 0;
@@ -145,22 +159,31 @@ async function getAdminSession() {
 }
 
 async function callback(status: 'active' | 'inactive', event: string) {
+  return callbackFor(testGroupId, 900001, status, event);
+}
+
+async function callbackFor(
+  groupId: number,
+  userId: number,
+  status: 'active' | 'inactive',
+  event: string,
+) {
   return app.inject({
     method: status === 'active' ? 'POST' : 'POST',
     url: status === 'active' ? '/api/callbacks/getcourse/access-link' : '/api/webhooks/getcourse',
     headers: { 'x-access-secret': webhookSecret },
     payload: {
-      user_id: 900001,
+      user_id: userId,
       email: 'repeat.user@example.test',
       name: 'Repeat User',
-      group_id: testGroupId,
+      group_id: groupId,
       access_status: status,
       event,
     },
   });
 }
 
-async function sendJoin(updateId: number, invite: string, telegramUserId = 700001) {
+async function sendJoin(updateId: number, invite: string, telegramUserId = 700001, chatId = testChatId) {
   return app.inject({
     method: 'POST',
     url: '/api/webhooks/telegram',
@@ -168,7 +191,7 @@ async function sendJoin(updateId: number, invite: string, telegramUserId = 70000
     payload: {
       update_id: updateId,
       chat_join_request: {
-        chat: { id: testChatId },
+        chat: { id: chatId },
         from: { id: telegramUserId, username: 'repeat_test', first_name: 'Repeat' },
         invite_link: { invite_link: invite },
       },
@@ -176,7 +199,7 @@ async function sendJoin(updateId: number, invite: string, telegramUserId = 70000
   });
 }
 
-test('005 migration is idempotent on a clean install and corrects the obsolete test group', () => {
+test('migrations are idempotent and map both production groups without enabling mutations', () => {
   const path = join(tempDirectory, 'migration.db');
   const database = new Database(path);
   database.pragma('foreign_keys = ON');
@@ -186,6 +209,28 @@ test('005 migration is idempotent on a clean install and corrects the obsolete t
   const obsolete = database.prepare('SELECT COUNT(*) AS count FROM chats WHERE getcourse_group_id = 4938193 AND is_enabled = 1').get() as { count: number };
   assert.equal(current.count, 1);
   assert.equal(obsolete.count, 0);
+  const productionMappings = database.prepare(`
+    SELECT getcourse_group_id, telegram_chat_id, telegram_chat_title
+    FROM chats
+    WHERE getcourse_group_id IN (?, ?)
+    ORDER BY getcourse_group_id
+  `).all(vedanieGroupId, hormonalGroupId) as Array<{
+    getcourse_group_id: number;
+    telegram_chat_id: number;
+    telegram_chat_title: string;
+  }>;
+  assert.deepEqual(productionMappings, [
+    {
+      getcourse_group_id: vedanieGroupId,
+      telegram_chat_id: vedanieChatId,
+      telegram_chat_title: 'Основной чат ВЕДАНИЕ',
+    },
+    {
+      getcourse_group_id: hormonalGroupId,
+      telegram_chat_id: hormonalChatId,
+      telegram_chat_title: 'Гормональный возраст',
+    },
+  ]);
   assert.equal(database.pragma('integrity_check', { simple: true }), 'ok');
   assert.deepEqual(database.pragma('foreign_key_check'), []);
   database.close();
@@ -318,12 +363,134 @@ test('production and arbitrary Telegram chats are rejected by the safety allowli
   assert.equal(config.allowProductionTelegramMutations, false);
   assert.equal(config.getcourseAuditScope, 'test');
   assert.equal(config.isAllowedTelegramMutation(testChatId), true);
+  assert.equal(config.isAllowedTelegramMutation(vedanieChatId), false);
+  assert.equal(config.isAllowedTelegramMutation(hormonalChatId), false);
   assert.equal(config.isAllowedTelegramMutation(-1001111111111), false);
   const before = telegramCalls.length;
   await assert.rejects(() => guardedTelegramBan(-1001111111111, 700001), /telegram_mutation_not_allowed/);
   assert.equal(telegramCalls.length, before);
-  const productionChats = db.prepare("SELECT telegram_chat_id FROM chats WHERE environment = 'production'").all() as Array<{ telegram_chat_id: number | null }>;
-  assert.ok(productionChats.every((chat) => chat.telegram_chat_id === null));
+  const productionChats = db.prepare(`
+    SELECT getcourse_group_id, telegram_chat_id
+    FROM chats
+    WHERE environment = 'production'
+    ORDER BY getcourse_group_id
+  `).all() as Array<{ getcourse_group_id: number; telegram_chat_id: number }>;
+  assert.deepEqual(productionChats, [
+    { getcourse_group_id: vedanieGroupId, telegram_chat_id: vedanieChatId },
+    { getcourse_group_id: hormonalGroupId, telegram_chat_id: hormonalChatId },
+  ]);
+});
+
+test('both production groups are repeat-safe and remain independent in an isolated Telegram simulation', async () => {
+  clearRuntimeData();
+  const originalAllowCheck = config.isAllowedTelegramMutation;
+  const state = new Map<string, MemberStatus>();
+  const stateKey = (chatId: number, userId: number) => `${chatId}:${userId}`;
+  const telegramUserId = 700002;
+  const getCourseUserId = 900002;
+
+  (config as any).isAllowedTelegramMutation = (chatId: number) => (
+    chatId === vedanieChatId
+    || chatId === hormonalChatId
+    || originalAllowCheck.call(config, chatId)
+  );
+  (telegram as any).getChatMember = async (chatId: number, userId: number) => ({
+    status: state.get(stateKey(chatId, userId)) ?? 'left',
+  });
+  (telegram as any).createJoinRequestInvite = async (chatId: number, _name: string, expiresAt: Date) => {
+    const invite = `https://t.me/+production-simulation-${++inviteCounter}`;
+    telegramCalls.push({ method: 'createInvite', chatId, invite, expiresAt });
+    return { invite_link: invite };
+  };
+  (telegram as any).approveJoin = async (chatId: number, userId: number) => {
+    telegramCalls.push({ method: 'approve', chatId, userId });
+    state.set(stateKey(chatId, userId), 'member');
+    return true;
+  };
+  (telegram as any).declineJoin = async () => true;
+  (telegram as any).ban = async (chatId: number, userId: number) => {
+    telegramCalls.push({ method: 'ban', chatId, userId });
+    state.set(stateKey(chatId, userId), 'kicked');
+    return true;
+  };
+  (telegram as any).unban = async (chatId: number, userId: number) => {
+    telegramCalls.push({ method: 'unban', chatId, userId });
+    state.set(stateKey(chatId, userId), 'left');
+    return true;
+  };
+  (telegram as any).revokeInvite = async () => true;
+
+  try {
+    const vedanieGrant = await callbackFor(vedanieGroupId, getCourseUserId, 'active', 'vedanie-grant-a');
+    const hormonalGrant = await callbackFor(hormonalGroupId, getCourseUserId, 'active', 'hormonal-grant-a');
+    assert.equal(vedanieGrant.statusCode, 200);
+    assert.equal(hormonalGrant.statusCode, 200);
+    const vedaniePermanent = new URL(vedanieGrant.body);
+    const hormonalPermanent = new URL(hormonalGrant.body);
+    assert.match(vedaniePermanent.pathname, /\/vedanie$/);
+    assert.match(hormonalPermanent.pathname, /\/hormonal-age$/);
+    assert.equal(vedaniePermanent.pathname.split('/')[2], hormonalPermanent.pathname.split('/')[2]);
+    await drainJobs();
+
+    const vedanieInviteA = (await app.inject({ method: 'GET', url: vedaniePermanent.pathname })).headers.location!;
+    assert.equal((await sendJoin(2001, vedanieInviteA, telegramUserId, vedanieChatId)).statusCode, 202);
+    await drainJobs();
+    const hormonalInviteA = (await app.inject({ method: 'GET', url: hormonalPermanent.pathname })).headers.location!;
+    assert.equal((await sendJoin(2002, hormonalInviteA, telegramUserId, hormonalChatId)).statusCode, 202);
+    await drainJobs();
+    assert.equal(state.get(stateKey(vedanieChatId, telegramUserId)), 'member');
+    assert.equal(state.get(stateKey(hormonalChatId, telegramUserId)), 'member');
+
+    await callbackFor(vedanieGroupId, getCourseUserId, 'inactive', 'vedanie-revoke-a');
+    await drainJobs();
+    assert.equal(state.get(stateKey(vedanieChatId, telegramUserId)), 'kicked');
+    assert.equal(state.get(stateKey(hormonalChatId, telegramUserId)), 'member');
+
+    const vedanieGrantB = await callbackFor(vedanieGroupId, getCourseUserId, 'active', 'vedanie-grant-b');
+    assert.equal(vedanieGrantB.body, vedaniePermanent.toString());
+    await drainJobs();
+    assert.equal(state.get(stateKey(vedanieChatId, telegramUserId)), 'left');
+    const vedanieInviteB = (await app.inject({ method: 'GET', url: vedaniePermanent.pathname })).headers.location!;
+    assert.notEqual(vedanieInviteB, vedanieInviteA);
+    await sendJoin(2003, vedanieInviteB, telegramUserId, vedanieChatId);
+    await drainJobs();
+    await callbackFor(vedanieGroupId, getCourseUserId, 'inactive', 'vedanie-revoke-b');
+    await drainJobs();
+    assert.equal(state.get(stateKey(vedanieChatId, telegramUserId)), 'kicked');
+    assert.equal(state.get(stateKey(hormonalChatId, telegramUserId)), 'member');
+
+    await callbackFor(hormonalGroupId, getCourseUserId, 'inactive', 'hormonal-revoke-a');
+    await drainJobs();
+    assert.equal(state.get(stateKey(hormonalChatId, telegramUserId)), 'kicked');
+    const hormonalGrantB = await callbackFor(hormonalGroupId, getCourseUserId, 'active', 'hormonal-grant-b');
+    assert.equal(hormonalGrantB.body, hormonalPermanent.toString());
+    await drainJobs();
+    assert.equal(state.get(stateKey(hormonalChatId, telegramUserId)), 'left');
+    const hormonalInviteB = (await app.inject({ method: 'GET', url: hormonalPermanent.pathname })).headers.location!;
+    assert.notEqual(hormonalInviteB, hormonalInviteA);
+    await sendJoin(2004, hormonalInviteB, telegramUserId, hormonalChatId);
+    await drainJobs();
+    await callbackFor(hormonalGroupId, getCourseUserId, 'inactive', 'hormonal-revoke-b');
+    await drainJobs();
+    assert.equal(state.get(stateKey(hormonalChatId, telegramUserId)), 'kicked');
+    assert.equal(state.get(stateKey(vedanieChatId, telegramUserId)), 'kicked');
+
+    const accessRows = db.prepare(`
+      SELECT c.getcourse_group_id, uca.access_status
+      FROM user_chat_access uca
+      JOIN users u ON u.id = uca.user_id
+      JOIN chats c ON c.id = uca.chat_id
+      WHERE u.getcourse_user_id = ? AND c.getcourse_group_id IN (?, ?)
+      ORDER BY c.getcourse_group_id
+    `).all(getCourseUserId, vedanieGroupId, hormonalGroupId);
+    assert.deepEqual(accessRows, [
+      { getcourse_group_id: vedanieGroupId, access_status: 'inactive' },
+      { getcourse_group_id: hormonalGroupId, access_status: 'inactive' },
+    ]);
+  } finally {
+    (config as any).isAllowedTelegramMutation = originalAllowCheck;
+    installTelegramFake();
+  }
 });
 
 test('worker failures deduplicate an incident and successful retry resolves it', async () => {
