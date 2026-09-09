@@ -4,7 +4,9 @@ set -euo pipefail
 ref="${1:-HEAD}"
 output_dir="${RELEASE_OUTPUT_DIR:-./release-artifacts}"
 commit="$(git rev-parse --verify "${ref}^{commit}")"
-version="$(git describe --tags --always "$commit" | tr '/ ' '--')"
+version="$(git describe --tags --always "$commit")"
+version="${version//\//-}"
+version="${version// /-}"
 archive="$output_dir/urbanqueen-access-$version.tar.gz"
 staging_dir="$(mktemp -d)"
 [[ "$staging_dir" == /tmp/* || "$staging_dir" == /var/* || "$staging_dir" == [A-Za-z]:/* ]]
