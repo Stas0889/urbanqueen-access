@@ -15,3 +15,4 @@ apps/web/vite.config.d.ts
 *.db-wal
 data/
 backups/
+release-artifacts/

@@ -6,6 +6,8 @@ import helmet from '@fastify/helmet';
 import jwt from '@fastify/jwt';
 import rateLimit from '@fastify/rate-limit';
 import { randomUUID } from 'node:crypto';
+import { resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { z } from 'zod';
 import { bootstrapAdmin, registerAuthRoutes, requireAdmin, requireAdminMutation } from './auth.js';
 import { config } from './config.js';
@@ -15,9 +17,10 @@ import { runGetCourseAudit, startGetCourseAudit } from './getcourse-audit.js';
 import { applyGetCourseAccessUpdate } from './getcourse.js';
 import { openIncident, resolveIncidents } from './incidents.js';
 import { telegram } from './telegram.js';
+import { nowMs } from './time.js';
 import { startTelegramPolling, startWorker } from './worker.js';
 
-const app = Fastify({
+export const app = Fastify({
   logger: true,
   trustProxy: config.isProduction,
   logController: new LogController({ disableRequestLogging: true }),
@@ -405,7 +408,7 @@ async function joinHandler(request: FastifyRequest, reply: FastifyReply) {
           .run(user.id, chat.id, nowIso());
       }
     }
-    const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
+    const expiresAt = new Date(nowMs() + 10 * 60 * 1000);
     const invite = await telegram.createJoinRequestInvite(chat.telegram_chat_id, `uq-${user.id.slice(0, 8)}`, expiresAt);
     db.prepare(`INSERT INTO invite_links (id, user_id, chat_id, telegram_invite_link, telegram_invite_name, expires_at, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
       .run(randomUUID(), user.id, chat.id, invite.invite_link, `uq-${user.id.slice(0, 8)}`, expiresAt.toISOString(), nowIso());
@@ -441,10 +444,15 @@ if (!config.isProduction) {
   });
 }
 
-if (config.telegramConfigured) {
-  startWorker(app.log);
-  if (config.telegramUpdateMode === 'polling') await startTelegramPolling(app.log);
+export async function startApplication() {
+  if (config.telegramConfigured) {
+    startWorker(app.log);
+    if (config.telegramUpdateMode === 'polling') await startTelegramPolling(app.log);
+  }
+  startGetCourseAudit(app.log);
+  await app.listen({ port: config.port, host: config.host });
 }
-startGetCourseAudit(app.log);
 
-await app.listen({ port: config.port, host: config.host });
+const isMainModule = Boolean(process.argv[1])
+  && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+if (isMainModule) await startApplication();

@@ -83,6 +83,18 @@ export async function runGetCourseAudit(log: FastifyBaseLogger) {
   }
 }
 
+export function getAuditRetryDelay(message: string, intervalMs: number) {
+  const normalized = message.toLowerCase();
+  if (normalized.includes('слишком много запросов') || normalized.includes('too many requests')) {
+    return Math.max(intervalMs, 2 * 60 * 60_000);
+  }
+  const busy = normalized.includes('уже запущен один экспорт') || normalized.includes('export already');
+  const timedOut = normalized.includes('getcourse_export_timeout');
+  return busy || timedOut
+    ? Math.max(intervalMs, 60 * 60_000)
+    : Math.max(intervalMs, 15 * 60_000);
+}
+
 export function startGetCourseAudit(log: FastifyBaseLogger) {
   if (timer || config.getcourseAuditScope === 'off' || !config.getcourseApiConfigured) return;
   const intervalMs = config.getcourseAuditIntervalMinutes * 60_000;
@@ -91,15 +103,9 @@ export function startGetCourseAudit(log: FastifyBaseLogger) {
       let nextDelay = intervalMs;
       try { await runGetCourseAudit(log); }
       catch (error) {
-        const message = error instanceof Error ? error.message.toLowerCase() : String(error).toLowerCase();
+        const message = error instanceof Error ? error.message : String(error);
         // Export API is capped per rolling two-hour window. Back off instead of retrying into the limit.
-        const exportIsBusy = message.includes('уже запущен один экспорт') || message.includes('export already');
-        const exportTimedOut = message.includes('getcourse_export_timeout');
-        nextDelay = message.includes('слишком много запросов') || message.includes('too many requests')
-          ? Math.max(intervalMs, 2 * 60 * 60_000)
-          : exportIsBusy || exportTimedOut
-            ? Math.max(intervalMs, 60 * 60_000)
-            : Math.max(intervalMs, 15 * 60_000);
+        nextDelay = getAuditRetryDelay(message, intervalMs);
       }
       schedule(nextDelay);
     }, delay);

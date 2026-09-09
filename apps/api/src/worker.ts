@@ -1,7 +1,9 @@
 import type { FastifyBaseLogger } from 'fastify';
 import { config } from './config.js';
 import { db, nowIso } from './db.js';
+import { openIncident, resolveIncidents } from './incidents.js';
 import { telegram, type TelegramMemberStatus } from './telegram.js';
+import { nowMs } from './time.js';
 
 const retrySeconds = [30, 120, 600, 3600];
 let timer: NodeJS.Timeout | undefined;
@@ -92,7 +94,7 @@ async function handleJoinRequest(update: Record<string, unknown>) {
     telegram_user_id: number | null; manual_block: number; access_status: string;
   } | undefined;
 
-  if (!invite || invite.revoked_at || new Date(invite.expires_at).getTime() < Date.now()) {
+  if (!invite || invite.revoked_at || new Date(invite.expires_at).getTime() < nowMs()) {
     await telegram.declineJoin(join.chat.id, join.from.id);
     event({ level: 'warning', type: 'UNKNOWN_INVITE', message: 'Заявка по неизвестной или истёкшей ссылке отклонена' });
     return;
@@ -141,7 +143,17 @@ async function execute(job: Job) {
   }
 }
 
-async function tick(log: FastifyBaseLogger) {
+function jobIncidentContext(job: Job) {
+  let payload: Record<string, unknown> = {};
+  try { payload = job.payload ? JSON.parse(job.payload) as Record<string, unknown> : {}; }
+  catch { /* Invalid payload is reported by the worker itself. */ }
+  return {
+    userId: typeof payload.user_id === 'string' ? payload.user_id : undefined,
+    chatId: typeof payload.chat_id === 'string' ? payload.chat_id : undefined,
+  };
+}
+
+export async function processNextJobOnce(log: FastifyBaseLogger) {
   if (running) return;
   running = true;
   let job: Job | undefined;
@@ -154,15 +166,30 @@ async function tick(log: FastifyBaseLogger) {
     if (!job) return;
     await execute(job);
     db.prepare(`UPDATE sync_jobs SET status = 'completed', updated_at = ? WHERE id = ?`).run(nowIso(), job.id);
+    const context = jobIncidentContext(job);
+    if (context.userId || context.chatId) {
+      resolveIncidents({
+        source: 'telegram',
+        eventType: 'TELEGRAM_SYNC_ERROR',
+        ...context,
+      });
+    }
   } catch (error) {
     log.error({ error, jobId: job?.id }, 'Telegram worker job failed');
     if (job) {
       const attempts = job.attempts + 1;
       const attention = attempts >= job.max_attempts || attempts > retrySeconds.length;
-      const runAfter = new Date(Date.now() + retrySeconds[Math.min(attempts - 1, retrySeconds.length - 1)] * 1000).toISOString();
+      const message = error instanceof Error ? error.message : String(error);
+      const runAfter = new Date(nowMs() + retrySeconds[Math.min(attempts - 1, retrySeconds.length - 1)] * 1000).toISOString();
       db.prepare(`UPDATE sync_jobs SET status = ?, attempts = ?, last_error = ?, run_after = ?, requires_admin_attention = ?, updated_at = ? WHERE id = ?`)
-        .run(attention ? 'failed' : 'pending', attempts, error instanceof Error ? error.message : String(error), runAfter, attention ? 1 : 0, nowIso(), job.id);
-      if (attention) event({ level: 'error', type: 'TELEGRAM_SYNC_ERROR', message: 'Telegram-операция требует внимания администратора', payload: { job_id: job.id } });
+        .run(attention ? 'failed' : 'pending', attempts, message, runAfter, attention ? 1 : 0, nowIso(), job.id);
+      openIncident({
+        source: 'telegram',
+        eventType: 'TELEGRAM_SYNC_ERROR',
+        message: attention ? 'Telegram-операция требует внимания администратора' : 'Telegram-операция временно завершилась ошибкой',
+        payload: { job_type: job.job_type },
+        ...jobIncidentContext(job),
+      });
     }
   } finally {
     running = false;
@@ -171,9 +198,9 @@ async function tick(log: FastifyBaseLogger) {
 
 export function startWorker(log: FastifyBaseLogger) {
   if (timer) return;
-  timer = setInterval(() => void tick(log), 2_000);
+  timer = setInterval(() => void processNextJobOnce(log), 2_000);
   timer.unref();
-  void tick(log);
+  void processNextJobOnce(log);
 }
 
 async function pollTelegram(log: FastifyBaseLogger) {

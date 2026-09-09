@@ -15,6 +15,14 @@ npm run dev
 Frontend: `http://localhost:5173`
 API: `http://localhost:4100`
 
+Core access regression tests use isolated SQLite plus Telegram/GetCourse fakes:
+
+```bash
+npm test
+```
+
+The test harness never enables production Telegram mutations.
+
 Backend по умолчанию слушает только `127.0.0.1`; внешний доступ в production
 идёт исключительно через отдельный Nginx virtual host.
 
@@ -60,6 +68,14 @@ SQLite работает в режиме WAL, включены foreign keys и `b
 назначает права `0600` и удаляет копии старше заданного срока. На production
 скрипт запускается `urbanqueen-backup.timer`; копии следует дополнительно переносить
 в согласованное российское backup-хранилище.
+
+Release/operations helpers:
+
+- `scripts/create-release.sh` — immutable Git archive plus SHA256;
+- `scripts/monitor-readiness.sh` — service, HTTP health, SQLite and open-incident checks;
+- `scripts/offsite-backup.sh` — dry-run by default, copies to an explicitly mounted off-server destination;
+- `scripts/restore-drill.sh` — checksum and SQLite restore validation on a disposable copy;
+- `scripts/rollback-release.sh` — checksum-gated rollback, also dry-run by default.
 
 ## Safety boundary
 
