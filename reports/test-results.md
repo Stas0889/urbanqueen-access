@@ -15,8 +15,20 @@
 
 ## Acceptance suite
 
-The single full `npm test`, full build, fresh API compile and source/dist
-comparison are recorded after the feature commit is finalized.
+Executed once after targeted development:
+
+- `npm test`: 7 passed, 0 failed, duration 1.084 s;
+- `npm run build`: API TypeScript and Web Vite production build passed;
+- API `tsc --noEmit`: passed;
+- fresh API compile: 11 files, 0 SHA mismatches against generated `dist`;
+- `git diff --check`: passed;
+- five operational shell scripts: Git Bash syntax passed.
+
+Immutable release:
+
+- source commit `aed6daa8708006bae23353757c802ef470ba20a9`;
+- `release-artifacts/urbanqueen-access-aed6daa.tar.gz`;
+- SHA256 `257129904d8540db5565aeea798725cb86430369af211b4e9d48c3cf39dd43e1`.
 
 ## Pending external acceptance
 
